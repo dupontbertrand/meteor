@@ -978,11 +978,51 @@ This is the ServerHost abstraction from the capability model — but for the spi
 
 ---
 
-## Step 8 — Next steps
+## Step 8 — Consolidation tests (real app: publications + accounts + reconnection + soak)
+
+### 8.1 Test app
+
+`meteor create --full` + `accounts-password` + custom collection/publication/methods. **74 packages** in the bundle.
+
+Server code:
+- `Tasks` collection with `tasks.insert` and `tasks.count` methods
+- `Meteor.publish('tasks.all')` returning `Tasks.find()`
+- `accounts-password` with email/password login
+
+### 8.2 Results
+
+**Node: 13/13 passed ✅**
+**Bun: 13/13 passed ✅**
+
+| Test | Node | Bun |
+|---|---|---|
+| DDP connect | ✅ | ✅ |
+| Method `tasks.insert` → returns id | ✅ | ✅ |
+| Subscription `tasks.all` → receives document with correct text | ✅ | ✅ |
+| Method `tasks.count` → returns correct count | ✅ | ✅ |
+| `createUser` → account created | ✅ | ✅ |
+| `login` → token returned | ✅ | ✅ |
+| Authenticated method call → has userId | ✅ | ✅ |
+| WebSocket close + reconnect → new session | ✅ | ✅ |
+| Method call after reconnect → works | ✅ | ✅ |
+| Soak 15s (74 method calls) → RSS stable | ✅ (delta: -2MB) | ✅ (delta: -2MB) |
+
+### 8.3 What this proves beyond the basic spike
+
+- **Real Meteor data flow works**: insert → MongoDB → publication → DDP `added` → client receives document
+- **Accounts system works**: createUser, login with SHA-256 password digest, token-based auth, userId in method context
+- **WebSocket reconnection works**: close, wait, reconnect, new session, methods still work
+- **No memory leak over 15s**: RSS stable on both runtimes (74 insert calls)
+- **74 packages** (including Blaze, FlowRouter, accounts-password, jQuery, Less, Rspack) all boot and function
+
+---
+
+## Step 9 — Next steps
 
 - [ ] Integrate the ESM loader into the bundler (`meteor build --format=esm`)
-- [ ] Test with accounts-password (full login flow)
 - [ ] Consider Bun.serve() as 5th transport in PR #14231
+- [ ] Write-up for Meteor forum
+- [ ] Longer soak test (30min+) to check MongoDB leak under Bun
 
 ---
 
