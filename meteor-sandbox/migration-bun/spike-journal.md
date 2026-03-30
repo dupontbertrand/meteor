@@ -1,14 +1,14 @@
 # Spike Journal — ESM Bundle Format
 
-**Branche :** `spike/esm-bundle-format` (depuis `devel` @ 5d4893f51c)
-**Objectif :** `meteor build --format=esm` produit un `index.mjs` avec imports ESM statiques
-**Début :** 2026-03-30
+**Branch:** `spike/esm-bundle-format` (from `devel` @ 5d4893f51c)
+**Goal:** `meteor build --format=esm` produces an `index.mjs` with static ESM imports
+**Started:** 2026-03-30
 
 ---
 
-## Étape 1 — Comprendre la génération actuelle du bundle
+## Step 1 — Understanding the current bundle generation
 
-### 1.1 Le chemin de code complet
+### 1.1 The complete code path
 
 ```
 meteor build (CLI)
@@ -17,18 +17,18 @@ meteor build (CLI)
       → makeServerTarget()                    bundler.js:3369
         → new ServerTarget()                  bundler.js:2771
       → target.make()
-        → _determineLoadOrder()               bundler.js:932   ← tri topologique des packages
+        → _determineLoadOrder()               bundler.js:932   ← topological sort of packages
         → _runCompilerPlugins()               bundler.js:857
-        → _emitResources()                    bundler.js:1162  ← produit this.js[]
+        → _emitResources()                    bundler.js:1162  ← produces this.js[]
       → writeSiteArchive()                    bundler.js:3064
         → writeTargetToPath()                 bundler.js:3000
-          → serverTarget.write(builder)       bundler.js:2792  ← écrit boot.js, runtime.js, etc.
-            → jsImage.write(builder)          bundler.js:2413  ← écrit les fichiers JS + program.json
+          → serverTarget.write(builder)       bundler.js:2792  ← writes boot.js, runtime.js, etc.
+            → jsImage.write(builder)          bundler.js:2413  ← writes JS files + program.json
 ```
 
-### 1.2 _mainJsContents — le template de main.js
+### 1.2 _mainJsContents — the main.js template
 
-**Fichier :** `tools/isobuild/bundler.js:208-214`
+**File:** `tools/isobuild/bundler.js:208-214`
 
 ```js
 exports._mainJsContents = [
@@ -40,42 +40,42 @@ exports._mainJsContents = [
 ].join("\n");
 ```
 
-C'est le contenu de `main.js` dans la racine du bundle. 6 lignes. CJS require().
+This is the content of `main.js` at the root of the bundle. 6 lines. CJS require().
 
-### 1.3 ServerTarget.write() — ce qui est copié dans programs/server/
+### 1.3 ServerTarget.write() — what gets copied into programs/server/
 
-**Fichier :** `tools/isobuild/bundler.js:2792-2906`
+**File:** `tools/isobuild/bundler.js:2792-2906`
 
-Fichiers copiés depuis `tools/static-assets/server/` :
-- `boot.js` — bootstrap principal, vm.runInThisContext loop
-- `boot-utils.js` — utilitaires
+Files copied from `tools/static-assets/server/`:
+- `boot.js` — main bootstrap, vm.runInThisContext loop
+- `boot-utils.js` — utilities
 - `debug.ts` — debugger pause
-- `server-json.js` — lit program.json
-- `mini-files.ts` — utilitaires filesystem
-- `npm-require.js` — résolution npm custom
-- `npm-rebuild.js` — rebuild natifs
-- `npm-rebuild-args.js` — args pour rebuild
+- `server-json.js` — reads program.json
+- `mini-files.ts` — filesystem utilities
+- `npm-require.js` — custom npm resolution
+- `npm-rebuild.js` — native rebuild
+- `npm-rebuild-args.js` — rebuild args
 - `runtime.js` — Module.prototype patching + Reify
 - `profile.ts` — profiling
 
-Aussi :
+Also:
 - `config.json` (release, appId, client archs)
-- `package.json` + `npm-shrinkwrap.json` (deps npm pour le bundle)
-- `node_modules/` (copié ou symlinké)
+- `package.json` + `npm-shrinkwrap.json` (npm deps for the bundle)
+- `node_modules/` (copied or symlinked)
 
-Puis appelle `jsImage.write()` pour les fichiers JS des packages.
+Then calls `jsImage.write()` for the package JS files.
 
-### 1.4 JsImageTarget.write() — génération de program.json
+### 1.4 JsImageTarget.write() — program.json generation
 
-**Fichier :** `tools/isobuild/bundler.js:2413-2662`
+**File:** `tools/isobuild/bundler.js:2413-2662`
 
-Itère sur `this.jsToLoad[]` (la liste ordonnée des fichiers JS). Pour chaque fichier :
-1. Écrit le fichier .js sur disque via `builder.writeToGeneratedFilename()`
-2. Écrit la source map si présente
-3. Écrit les assets statiques associés
-4. Construit un item pour le tableau `load[]`
+Iterates over `this.jsToLoad[]` (the ordered list of JS files). For each file:
+1. Writes the .js file to disk via `builder.writeToGeneratedFilename()`
+2. Writes the source map if present
+3. Writes associated static assets
+4. Builds an item for the `load[]` array
 
-Chaque item dans `load[]` :
+Each item in `load[]`:
 ```json
 {
   "path": "packages/meteor.js",
@@ -85,7 +85,7 @@ Chaque item dans `load[]` :
 }
 ```
 
-Puis écrit program.json :
+Then writes program.json:
 ```js
 await builder.writeJson('program.json', {
   format: "javascript-image-pre1",
@@ -94,70 +94,70 @@ await builder.writeJson('program.json', {
 });
 ```
 
-### 1.5 L'ordre de chargement — _determineLoadOrder()
+### 1.5 The load order — _determineLoadOrder()
 
-**Fichier :** `tools/isobuild/bundler.js:932-1083`
+**File:** `tools/isobuild/bundler.js:932-1083`
 
-Tri topologique en 2 phases :
-1. **Phase 1** : Quels packages sont utilisés ? (suit les `uses` récursivement)
-2. **Phase 2** : Tri topo — si X dépend de Y, Y apparaît avant X
+Topological sort in 2 phases:
+1. **Phase 1**: Which packages are used? (follows `uses` recursively)
+2. **Phase 2**: Topo sort — if X depends on Y, Y appears before X
 
-Résultat : `this.unibuilds[]` — liste ordonnée utilisée ensuite par `_emitResources()`.
+Result: `this.unibuilds[]` — ordered list used subsequently by `_emitResources()`.
 
-**NOTE IMPORTANTE :** L'ordre de dépendance est DÉJÀ calculé par isobuild. On n'a pas à le recalculer. On doit juste l'émettre comme des imports ESM dans le bon ordre.
+**IMPORTANT NOTE:** The dependency order is ALREADY computed by isobuild. We don't need to recompute it. We just need to emit it as ESM imports in the correct order.
 
-### 1.6 Comment les packages sont wrappés — linker.js
+### 1.6 How packages are wrapped — linker.js
 
-**Fichier :** `tools/isobuild/linker.js:661-689`
+**File:** `tools/isobuild/linker.js:661-689`
 
-Deux modes de wrapping :
+Two wrapping modes:
 
-**Mode IIFE (packages sans modules) :**
+**IIFE mode (packages without modules):**
 ```js
 (function(){
-  // code du package
+  // package code
 }).call(this);
 ```
 
-**Mode module (packages avec meteorInstall) :**
+**Module mode (packages with meteorInstall):**
 ```js
 function module(require, exports, module) {
-  // code du package
+  // package code
 }
 ```
 
-C'est le linker qui wrappe. Dans le runtime actuel, boot.js itère sur program.json, lit chaque fichier, le re-wrappe dans une IIFE avec `(function(Npm, Assets){...})`, et l'exécute via `vm.runInThisContext`.
+The linker does the wrapping. In the current runtime, boot.js iterates over program.json, reads each file, re-wraps it in an IIFE with `(function(Npm, Assets){...})`, and executes it via `vm.runInThisContext`.
 
-### 1.7 Flags existants pour le format de sortie
+### 1.7 Existing flags for the output format
 
-**Fichier :** `tools/isobuild/bundler.js:3285-3310`
+**File:** `tools/isobuild/bundler.js:3285-3310`
 
-Options actuelles de `bundle()` :
+Current `bundle()` options:
 - `buildMode` : 'production' | 'development' | 'test'
 - `minifyMode` : 'production' | 'development'
 - `includeNodeModules` : false | 'symlink'
 - `serverArch` : string
 - `webArchs` : string[]
 
-Formats de fichier :
+File formats:
 - `program.json` : `"javascript-image-pre1"`
 - `star.json` : `"site-archive-pre1"`
 
-**Pas de flag `--format` existant.** Il faudra l'ajouter.
+**No existing `--format` flag.** We'll need to add it.
 
-### 1.8 Structure de sortie actuelle
+### 1.8 Current output structure
 
 ```
 bundle/
-├── main.js                          ← _mainJsContents (6 lignes CJS)
+├── main.js                          ← _mainJsContents (6 lines CJS)
 ├── README
-├── star.json                        ← manifest global
+├── star.json                        ← global manifest
 ├── .node_version.txt
 ├── programs/
 │   ├── server/
-│   │   ├── boot.js                  ← copié depuis static-assets
+│   │   ├── boot.js                  ← copied from static-assets
 │   │   ├── boot-utils.js
-│   │   ├── runtime.js               ← copié depuis static-assets
+│   │   ├── runtime.js               ← copied from static-assets
 │   │   ├── npm-require.js
 │   │   ├── server-json.js
 │   │   ├── mini-files.js
@@ -172,11 +172,11 @@ bundle/
 │   │   ├── npm-rebuilds.json
 │   │   ├── node_modules/            ← npm packages
 │   │   ├── packages/
-│   │   │   ├── meteor.js            ← code du package meteor
+│   │   │   ├── meteor.js            ← meteor package code
 │   │   │   ├── mongo.js
 │   │   │   └── ...
 │   │   ├── app/
-│   │   │   └── app.js               ← code applicatif
+│   │   │   └── app.js               ← application code
 │   │   └── assets/
 │   │       ├── packages/
 │   │       └── app/
@@ -186,67 +186,67 @@ bundle/
 
 ---
 
-## Étape 2 — Points d'intervention pour le format ESM
+## Step 2 — Intervention points for the ESM format
 
-### 2.1 Ce qu'il faut modifier
+### 2.1 What needs to be modified
 
-1. **`_mainJsContents`** (bundler.js:208) — Nouvelle version ESM :
-   - `index.mjs` au lieu de `main.js`
-   - Imports statiques au lieu de require()
+1. **`_mainJsContents`** (bundler.js:208) — New ESM version:
+   - `index.mjs` instead of `main.js`
+   - Static imports instead of require()
 
-2. **`ServerTarget.write()`** (bundler.js:2792) — Ne pas copier boot.js, runtime.js, npm-require.js quand format=esm. Copier seulement les fichiers encore nécessaires (npm-rebuild.js pour postinstall).
+2. **`ServerTarget.write()`** (bundler.js:2792) — Don't copy boot.js, runtime.js, npm-require.js when format=esm. Only copy files that are still needed (npm-rebuild.js for postinstall).
 
-3. **`JsImageTarget.write()`** (bundler.js:2413) — Quand format=esm :
-   - Écrire chaque fichier comme module ESM (.mjs)
-   - Générer `index.mjs` avec les imports dans l'ordre de `load[]`
-   - Ne pas générer program.json (l'ordre est dans les imports)
+3. **`JsImageTarget.write()`** (bundler.js:2413) — When format=esm:
+   - Write each file as an ESM module (.mjs)
+   - Generate `index.mjs` with imports in the order of `load[]`
+   - Don't generate program.json (the order is in the imports)
 
-4. **`writeSiteArchive()`** (bundler.js:3064) — Écrire `index.mjs` au lieu de `main.js`
+4. **`writeSiteArchive()`** (bundler.js:3064) — Write `index.mjs` instead of `main.js`
 
-5. **`File._getClosureHeader/Footer()`** (linker.js:661) — Peut-être pas besoin de changer si on garde le wrapping existant et qu'on l'émet comme module ESM.
+5. **`File._getClosureHeader/Footer()`** (linker.js:661) — May not need to change if we keep the existing wrapping and emit it as an ESM module.
 
-### 2.2 Ce qu'il ne faut PAS modifier
+### 2.2 What should NOT be modified
 
-- `_determineLoadOrder()` — l'ordre est déjà correct
-- `_emitResources()` — les ressources sont déjà correctes
-- `toJsImage()` — la sérialisation intermédiaire reste valide
-- Le pipeline de compilation des packages
-- Le linker (sauf potentiellement les closures)
-- Les client targets
+- `_determineLoadOrder()` — the order is already correct
+- `_emitResources()` — the resources are already correct
+- `toJsImage()` — the intermediate serialization remains valid
+- The package compilation pipeline
+- The linker (except possibly the closures)
+- The client targets
 
-### 2.3 Question clé à résoudre
+### 2.3 Key question to resolve
 
-**Le code des packages dans le bundle est déjà compilé par Reify (imports → module.link).** Dans un bundle ESM, ce code devrait être du vrai ESM (import/export natifs). Deux approches :
+**The package code in the bundle is already compiled by Reify (imports → module.link).** In an ESM bundle, this code should be real ESM (native import/export). Two approaches:
 
-**Approche A — Minimal :** Garder le code tel quel (avec module.link etc.) mais le wrapper dans un module ESM. Le code interne utilise toujours les appels Reify, mais le module lui-même est un .mjs.
+**Approach A — Minimal:** Keep the code as-is (with module.link etc.) but wrap it in an ESM module. The internal code still uses Reify calls, but the module itself is a .mjs.
 
-**Approche B — Propre :** Modifier le pipeline de compilation pour émettre du vrai ESM au lieu de CJS+Reify. Beaucoup plus de travail mais résultat plus propre.
+**Approach B — Clean:** Modify the compilation pipeline to emit real ESM instead of CJS+Reify. Much more work but cleaner result.
 
-**Pour le spike : Approche A.** On garde le code compilé tel quel, on change juste le wrapper et le mécanisme de chargement.
+**For the spike: Approach A.** We keep the compiled code as-is, we only change the wrapper and the loading mechanism.
 
 ---
 
-## Étape 2b — Analyse d'un bundle réel (app --bare + webapp)
+## Step 2b — Analysis of a real bundle (app --bare + webapp)
 
-### 2b.1 Structure réelle d'un fichier package dans le bundle
+### 2b.1 Actual structure of a package file in the bundle
 
-**Découverte critique :** Les packages ne sont PAS des IIFE simples. Ils utilisent `Package["core-runtime"].queue()` :
+**Critical discovery:** Packages are NOT simple IIFEs. They use `Package["core-runtime"].queue()`:
 
 ```js
-// packages/meteor.js — structure réelle
+// packages/meteor.js — actual structure
 Package["core-runtime"].queue("meteor", function () {
   /* Package-scope variables */
   var global, meteorEnv, Meteor, EmitterPromise;
 
   (function(){
-    // ... code de global.js ...
+    // ... global.js code ...
   }).call(this);
 
   (function(){
-    // ... code de server_environment.js ...
+    // ... server_environment.js code ...
   }).call(this);
 
-  // ... plus de fichiers ...
+  // ... more files ...
 
   /* Exports */
   return {
@@ -260,27 +260,27 @@ Package["core-runtime"].queue("meteor", function () {
 });
 ```
 
-**Et core-runtime.js** est le premier chargé, il crée `Package['core-runtime'] = { queue, waitUntilAllLoaded }`. C'est un système de queue async — les packages s'enregistrent via `queue()` et sont exécutés dans l'ordre.
+**And core-runtime.js** is loaded first, it creates `Package['core-runtime'] = { queue, waitUntilAllLoaded }`. It's an async queue system — packages register via `queue()` and are executed in order.
 
-**Implication pour le spike :** On ne peut PAS juste mettre `import` devant chaque fichier. Le code des packages est couplé au système `Package["core-runtime"].queue()`. Ce système :
-1. Queue les packages par nom
-2. Les exécute séquentiellement
-3. Stocke les exports dans `Package[name]`
+**Implication for the spike:** We can NOT just put `import` in front of each file. The package code is coupled to the `Package["core-runtime"].queue()` system. This system:
+1. Queues packages by name
+2. Executes them sequentially
+3. Stores exports in `Package[name]`
 
-Pour l'approche ESM minimale (Approche A), on a deux options :
+For the minimal ESM approach (Approach A), we have two options:
 
-**Option A1 — Garder core-runtime.queue() :** Le `index.mjs` charge core-runtime d'abord, puis importe les packages qui utilisent `queue()` comme avant. C'est le chemin de moindre résistance. On remplace juste le mécanisme de chargement (vm → import), pas le mécanisme d'enregistrement.
+**Option A1 — Keep core-runtime.queue():** The `index.mjs` loads core-runtime first, then imports the packages that use `queue()` as before. This is the path of least resistance. We only replace the loading mechanism (vm → import), not the registration mechanism.
 
-**Option A2 — Réécrire les wrappers :** Le linker émet du vrai ESM (`export const Meteor = ...`) au lieu de `Package["core-runtime"].queue(...)`. Beaucoup plus de travail.
+**Option A2 — Rewrite the wrappers:** The linker emits real ESM (`export const Meteor = ...`) instead of `Package["core-runtime"].queue(...)`. Much more work.
 
-**Décision : Option A1 pour le spike.** On garde le système queue, on change juste le loader.
+**Decision: Option A1 for the spike.** We keep the queue system, we only change the loader.
 
-### 2b.2 program.json — contenu réel
+### 2b.2 program.json — actual content
 
-54 packages dans une app --bare + webapp. Ordre :
+54 packages in a --bare + webapp app. Order:
 ```
-1. core-runtime.js    ← crée Package['core-runtime'].queue()
-2. meteor.js          ← s'enregistre via queue("meteor", ...)
+1. core-runtime.js    ← creates Package['core-runtime'].queue()
+2. meteor.js          ← registers via queue("meteor", ...)
 3. meteor-base.js
 4. mobile-experience.js
 5. npm-mongo.js
@@ -292,34 +292,34 @@ Pour l'approche ESM minimale (Approche A), on a deux options :
 54. app/global-imports.js
 ```
 
-### 2b.3 Ce que boot.js fait avec ces fichiers (rappel)
+### 2b.3 What boot.js does with these files (recap)
 
-boot.js lit program.json, puis pour CHAQUE fichier dans `load[]` :
-1. `fs.readFileSync(path)` — lit le contenu
-2. Wrappe dans `(function(Npm, Assets, ...){ <contenu> })`
-3. `vm.runInThisContext(wrapped, { filename })` — exécute
-4. Appelle la fonction résultante avec les args appropriés
+boot.js reads program.json, then for EACH file in `load[]`:
+1. `fs.readFileSync(path)` — reads the content
+2. Wraps in `(function(Npm, Assets, ...){ <content> })`
+3. `vm.runInThisContext(wrapped, { filename })` — executes
+4. Calls the resulting function with the appropriate args
 
-**Mais** le contenu des fichiers contient déjà `Package["core-runtime"].queue(...)`. Donc le wrapping boot.js ajoute une couche SUPPLÉMENTAIRE au-dessus du wrapping déjà fait par le linker.
+**But** the file contents already contain `Package["core-runtime"].queue(...)`. So the boot.js wrapping adds an ADDITIONAL layer on top of the wrapping already done by the linker.
 
-### 2b.4 Ce que ça signifie pour le spike ESM
+### 2b.4 What this means for the ESM spike
 
-Le chemin le plus simple :
+The simplest path:
 
 ```js
-// index.mjs — remplace main.js + boot.js
+// index.mjs — replaces main.js + boot.js
 import './__meteor_config.mjs';
 
-// core-runtime DOIT être chargé en premier — il crée Package['core-runtime'].queue()
+// core-runtime MUST be loaded first — it creates Package['core-runtime'].queue()
 import './packages/core-runtime.js';
 
-// Les autres packages s'enregistrent via queue() — l'import les exécute
+// The other packages register via queue() — the import executes them
 import './packages/meteor.js';
 import './packages/meteor-base.js';
-// ... 50+ imports dans l'ordre de program.json ...
+// ... 50+ imports in the order of program.json ...
 import './app/global-imports.js';
 
-// Attendre que tous les packages async soient chargés
+// Wait for all async packages to load
 const { waitUntilAllLoaded } = Package['core-runtime'];
 const ready = waitUntilAllLoaded();
 if (ready) await ready;
@@ -328,57 +328,57 @@ if (ready) await ready;
 Meteor._runStartupHooks?.();
 ```
 
-**Le code des packages ne change pas.** Ils utilisent toujours `queue()`. Mais au lieu d'être chargés par boot.js via vm, ils sont chargés par `import` — l'import exécute le code top-level, qui appelle `queue()`, qui enregistre le package.
+**The package code doesn't change.** They still use `queue()`. But instead of being loaded by boot.js via vm, they are loaded by `import` — the import executes the top-level code, which calls `queue()`, which registers the package.
 
-**Avantage :** On ne touche pas au linker, pas au compilateur, pas au format des packages. On change SEULEMENT le mécanisme de chargement.
+**Advantage:** We don't touch the linker, the compiler, or the package format. We ONLY change the loading mechanism.
 
 ---
 
-## Étape 2c — Analyse du wrapping boot.js (Npm, Assets, specialArgs)
+## Step 2c — Analysis of boot.js wrapping (Npm, Assets, specialArgs)
 
-### 2c.1 Le wrapping supplémentaire de boot.js
+### 2c.1 The additional boot.js wrapping
 
-boot.js ajoute un wrapping **autour** du contenu de chaque fichier :
+boot.js adds a wrapping **around** the content of each file:
 
 ```js
-// boot.js ligne 387-400 : wrapping
+// boot.js line 387-400: wrapping
 const wrapped = "(function(Npm, Assets" + specialKeys + "){ " + code + "\n})";
 const func = require('vm').runInThisContext(wrapped, { filename: scriptPath });
 func.apply(global, [NpmObj, AssetsObj, ...specialValues]);
 ```
 
-Donc le code final exécuté pour `packages/webapp.js` est :
+So the final executed code for `packages/webapp.js` is:
 
 ```js
 (function(Npm, Assets) {
   Package["core-runtime"].queue("webapp", function() {
-    // ... code qui utilise Npm.require('express/package.json') ...
+    // ... code that uses Npm.require('express/package.json') ...
   });
 })(NpmObj, AssetsObj)
 ```
 
-`Npm` est un paramètre de la fonction wrapper. Le code interne le capture par **closure**.
+`Npm` is a parameter of the wrapper function. The internal code captures it by **closure**.
 
-### 2c.2 L'objet Npm — ce qu'il contient
+### 2c.2 The Npm object — what it contains
 
-Créé à boot.js:259 pour CHAQUE fichier dans `serverJson.load` :
+Created at boot.js:259 for EACH file in `serverJson.load`:
 
 ```js
 const Npm = {
   require: function(name, error) {
-    // 1. Cherche dans les node_modules spécifiques au package (fileInfo.node_modules)
-    // 2. Cherche dans le node_modules global du bundle
-    // 3. Tombe sur require.resolve() natif
-    // 4. Throw si pas trouvé
+    // 1. Looks in the node_modules specific to the package (fileInfo.node_modules)
+    // 2. Looks in the global node_modules of the bundle
+    // 3. Falls back to native require.resolve()
+    // 4. Throws if not found
   }
 };
 ```
 
-**Point critique :** L'objet `Npm` est différent pour chaque fichier ! Il a une liste de `nonLocalNodeModulesPaths` spécifique à ce package (basée sur `fileInfo.node_modules` de program.json).
+**Critical point:** The `Npm` object is different for each file! It has a `nonLocalNodeModulesPaths` list specific to that package (based on `fileInfo.node_modules` from program.json).
 
-### 2c.3 L'objet Assets — ce qu'il contient
+### 2c.3 The Assets object — what it contains
 
-Créé à boot.js:356 pour CHAQUE fichier :
+Created at boot.js:356 for EACH file:
 
 ```js
 const Assets = {
@@ -389,53 +389,53 @@ const Assets = {
 };
 ```
 
-Résout les assets depuis `fileInfo.assets` (le map dans program.json).
+Resolves assets from `fileInfo.assets` (the map in program.json).
 
-### 2c.4 specialArgPaths — arguments injectés pour 2 packages seulement
+### 2c.4 specialArgPaths — arguments injected for only 2 packages
 
-boot.js:197-222 :
+boot.js:197-222:
 
-| Package | Argument injecté | Ce qu'il contient |
+| Package | Injected argument | What it contains |
 |---|---|---|
-| `packages/modules-runtime.js` | `npmRequire`, `Profile` | La fonction `require` depuis npm-require.js + le profiler |
-| `packages/dynamic-import.js` | `dynamicImportInfo` | Map des chemins `dynamic/` par architecture client |
+| `packages/modules-runtime.js` | `npmRequire`, `Profile` | The `require` function from npm-require.js + the profiler |
+| `packages/dynamic-import.js` | `dynamicImportInfo` | Map of `dynamic/` paths per client architecture |
 
-Seulement 2 packages sur 54 ont des arguments spéciaux.
+Only 2 packages out of 54 have special arguments.
 
-### 2c.5 Combien de packages utilisent Npm et Assets ?
+### 2c.5 How many packages use Npm and Assets?
 
-**Npm.require() — 8 packages sur 54 :**
-- meteor.js (4 usages : async_hooks, denque, url, events)
-- npm-mongo.js (3 : mongodb driver)
-- modules-runtime.js (3 : fallback require)
+**Npm.require() — 8 packages out of 54:**
+- meteor.js (4 usages: async_hooks, denque, url, events)
+- npm-mongo.js (3: mongodb driver)
+- modules-runtime.js (3: fallback require)
 - ddp-server.js (3)
 - socket-stream-client.js (2)
-- webapp.js (1 : express version)
+- webapp.js (1: express version)
 - ecmascript-runtime-server.js (1)
 - autoupdate.js (1)
 
-**Assets — 1 package sur 54 :**
-- mongo.js (1 usage : chemin vers un fichier TLS/SSL)
+**Assets — 1 package out of 54:**
+- mongo.js (1 usage: path to a TLS/SSL file)
 
-### 2c.6 Le problème ESM et la solution
+### 2c.6 The ESM problem and the solution
 
-**PROBLÈME :** Si on fait `import './packages/webapp.js'`, le code s'exécute immédiatement. Mais `Npm` n'est pas défini car il n'y a pas de fonction wrapper qui le passe en paramètre. → `ReferenceError: Npm is not defined`.
+**PROBLEM:** If we do `import './packages/webapp.js'`, the code executes immediately. But `Npm` is not defined because there is no wrapper function passing it as a parameter. → `ReferenceError: Npm is not defined`.
 
-**SOLUTION la plus simple : mettre Npm et Assets en globaux.**
+**SIMPLEST SOLUTION: make Npm and Assets globals.**
 
 ```js
-// Dans index.mjs, AVANT les imports de packages
+// In index.mjs, BEFORE the package imports
 globalThis.Npm = { require: createNpmRequire(serverDir) };
 globalThis.Assets = createAssets(serverDir);
 ```
 
-Puis les packages font `Npm.require('express')` → cherche dans `globalThis.Npm`.
+Then packages do `Npm.require('express')` → looks up `globalThis.Npm`.
 
-**Inconvénient :** Aujourd'hui chaque package a son propre objet Npm avec des chemins de résolution spécifiques. En global, tous les packages partagent le même Npm.
+**Drawback:** Today each package has its own Npm object with specific resolution paths. As a global, all packages share the same Npm.
 
-**Mais dans la pratique :** Le bundler flatten déjà les `node_modules` dans un seul répertoire. La résolution multi-path de npm-require.js est surtout un héritage du temps où chaque package avait son propre `node_modules`. Dans un bundle built, un `require('express')` standard résout correctement.
+**But in practice:** The bundler already flattens `node_modules` into a single directory. The multi-path resolution of npm-require.js is mostly a legacy from the time when each package had its own `node_modules`. In a built bundle, a standard `require('express')` resolves correctly.
 
-**SOLUTION RETENUE pour le spike :**
+**SOLUTION CHOSEN for the spike:**
 
 ```js
 // index.mjs
@@ -444,209 +444,209 @@ const require = createRequire(import.meta.url);
 globalThis.Npm = { require: (name) => require(name) };
 globalThis.Assets = { /* ... */ };
 
-// Puis les imports de packages
+// Then the package imports
 import './packages/core-runtime.js';
 import './packages/meteor.js';
 // ...
 ```
 
-### 2c.7 specialArgPaths — comment les gérer en ESM
+### 2c.7 specialArgPaths — how to handle them in ESM
 
-**modules-runtime.js** a besoin de `npmRequire` et `Profile`. Solutions :
-- `npmRequire` = le même `require` de node:module → `globalThis.npmRequire = require`
-- `Profile` = le profiler de boot → peut être un no-op pour le spike
+**modules-runtime.js** needs `npmRequire` and `Profile`. Solutions:
+- `npmRequire` = the same `require` from node:module → `globalThis.npmRequire = require`
+- `Profile` = the boot profiler → can be a no-op for the spike
 
-**dynamic-import.js** a besoin de `dynamicImportInfo`. Solution :
-- Mettre en global : `globalThis.dynamicImportInfo = { server: { dynamicRoot: ... }, ... }`
+**dynamic-import.js** needs `dynamicImportInfo`. Solution:
+- Make it global: `globalThis.dynamicImportInfo = { server: { dynamicRoot: ... }, ... }`
 
-### 2c.8 Le flow complet de boot.js qu'on remplace
+### 2c.8 The complete boot.js flow that we're replacing
 
 ```
-boot.js fait :
-1. Check version Node                          → DROP (engines dans package.json)
-2. Lit program.json, config.json, star.json     → SIMPLIFIER (config inline dans index.mjs)
-3. Setup __meteor_bootstrap__                   → GARDER (global)
-4. Setup __meteor_runtime_config__              → GARDER (global)
-5. Install source-map-support                   → DROP (natif runtime)
-6. Setup AsyncLocalStorage                      → GARDER
-7. Pour chaque fichier dans program.json:
-   a. Lit le fichier (fs.readFileSync)          → REMPLACER par import
-   b. Crée Npm spécifique au fichier            → REMPLACER par global Npm
-   c. Crée Assets spécifique au fichier         → REMPLACER par global Assets
-   d. Wrappe dans (function(Npm,Assets){...})   → PLUS NÉCESSAIRE
-   e. vm.runInThisContext                       → PLUS NÉCESSAIRE
-   f. Appelle la fonction avec args             → PLUS NÉCESSAIRE
-8. waitUntilAllLoaded()                         → GARDER
-9. callStartupHooks()                           → GARDER
-10. runMain()                                   → GARDER
+boot.js does:
+1. Check Node version                          → DROP (engines in package.json)
+2. Read program.json, config.json, star.json    → SIMPLIFY (config inline in index.mjs)
+3. Setup __meteor_bootstrap__                   → KEEP (global)
+4. Setup __meteor_runtime_config__              → KEEP (global)
+5. Install source-map-support                   → DROP (native runtime)
+6. Setup AsyncLocalStorage                      → KEEP
+7. For each file in program.json:
+   a. Read the file (fs.readFileSync)           → REPLACE with import
+   b. Create file-specific Npm                  → REPLACE with global Npm
+   c. Create file-specific Assets               → REPLACE with global Assets
+   d. Wrap in (function(Npm,Assets){...})       → NO LONGER NEEDED
+   e. vm.runInThisContext                       → NO LONGER NEEDED
+   f. Call the function with args               → NO LONGER NEEDED
+8. waitUntilAllLoaded()                         → KEEP
+9. callStartupHooks()                           → KEEP
+10. runMain()                                   → KEEP
 ```
 
 ---
 
-## Étape 2d — Micro-tests d'import sur un vrai bundle
+## Step 2d — Micro-tests of import on a real bundle
 
-### 2d.1 Test v2 — core-runtime + meteor (premiers résultats)
+### 2d.1 Test v2 — core-runtime + meteor (first results)
 
-**Setup :** App `--bare` + webapp, `meteor build --directory`, `npm install`, puis un `test-import.mjs` qui setup les globals et importe les packages un par un.
+**Setup:** App `--bare` + webapp, `meteor build --directory`, `npm install`, then a `test-import.mjs` that sets up globals and imports packages one by one.
 
-**Résultat :**
+**Result:**
 ```
-✅ core-runtime.js imported OK — crée Package['core-runtime'].queue()
+✅ core-runtime.js imported OK — creates Package['core-runtime'].queue()
 ✅ meteor.js imported OK — Meteor.isServer = true
 ```
 
-**Première découverte :** Les fichiers du bundle SONT importables via `import`. Le code top-level (qui appelle `Package["core-runtime"].queue(...)`) s'exécute correctement.
+**First discovery:** The bundle files ARE importable via `import`. The top-level code (which calls `Package["core-runtime"].queue(...)`) executes correctly.
 
-**Problème rencontré :** `meteor.js` échoue sur `Npm.require('denque')` car notre `Npm.require` global ne résout pas dans le bon `node_modules`. Chaque package a son propre chemin `node_modules` défini dans `program.json` (ex: `npm/node_modules/meteor/meteor/node_modules` pour le package meteor).
+**Problem encountered:** `meteor.js` fails on `Npm.require('denque')` because our global `Npm.require` doesn't resolve in the correct `node_modules`. Each package has its own `node_modules` path defined in `program.json` (e.g., `npm/node_modules/meteor/meteor/node_modules` for the meteor package).
 
-### 2d.2 Test v3 — résolution contextuelle par package
+### 2d.2 Test v3 — contextual resolution per package
 
-**Solution :** Lire `program.json`, construire un map `packagePath → node_modules[]`, et setter `currentPackagePath` avant chaque import pour que `Npm.require` sache où chercher.
+**Solution:** Read `program.json`, build a map `packagePath → node_modules[]`, and set `currentPackagePath` before each import so that `Npm.require` knows where to look.
 
-**Résultat :** 53/54 packages importés avec succès. Le seul échec : `modules.js` qui utilise `npmRequire` (pas `Npm.require`) avec un chemin virtuel absolu `/node_modules/meteor/modules/node_modules/@meteorjs/reify/...`.
+**Result:** 53/54 packages imported successfully. The only failure: `modules.js` which uses `npmRequire` (not `Npm.require`) with an absolute virtual path `/node_modules/meteor/modules/node_modules/@meteorjs/reify/...`.
 
-### 2d.3 Test v4 — chemins virtuels absolus
+### 2d.3 Test v4 — absolute virtual paths
 
-**Découverte critique : `meteorInstall` et les chemins virtuels**
+**Critical discovery: `meteorInstall` and virtual paths**
 
-Le système de modules Meteor (`modules-runtime.js`) crée un filesystem virtuel où chaque package vit dans `/node_modules/meteor/<package>/`. Quand un package fait `require('@meteorjs/reify')`, `meteorInstall` le résout comme `/node_modules/meteor/modules/node_modules/@meteorjs/reify/...`.
+The Meteor module system (`modules-runtime.js`) creates a virtual filesystem where each package lives in `/node_modules/meteor/<package>/`. When a package does `require('@meteorjs/reify')`, `meteorInstall` resolves it as `/node_modules/meteor/modules/node_modules/@meteorjs/reify/...`.
 
-La fonction `useNode()` dans modules-runtime.js (ligne 731-751) appelle `npmRequire(this.id)` avec ce chemin virtuel absolu. C'est `npmRequire` (injecté par boot.js comme specialArg) qui fait le mapping vers le vrai chemin sur disque.
+The `useNode()` function in modules-runtime.js (line 731-751) calls `npmRequire(this.id)` with this absolute virtual path. It's `npmRequire` (injected by boot.js as a specialArg) that does the mapping to the real path on disk.
 
-**Solution partielle :** Notre `contextualRequire` strip le préfixe `/node_modules/meteor/<pkg>/node_modules/` et résout le reste via `createRequire` depuis le bon `node_modules` du package.
+**Partial solution:** Our `contextualRequire` strips the `/node_modules/meteor/<pkg>/node_modules/` prefix and resolves the rest via `createRequire` from the correct package `node_modules`.
 
-**Résultat :** 53/54, `modules.js` passe maintenant. Échec restant : `react-fast-refresh.js` (même problème de chemin virtuel pour `react-refresh/babel.js`).
+**Result:** 53/54, `modules.js` passes now. Remaining failure: `react-fast-refresh.js` (same virtual path problem for `react-refresh/babel.js`).
 
-### 2d.4 Test v5 — cascade de dépendances
+### 2d.4 Test v5 — dependency cascade
 
-**Problème :** `react-fast-refresh` échoue → `ecmascript` dépend de `ReactFastRefresh` → `base64` dépend de `ECMAScript` → cascade.
+**Problem:** `react-fast-refresh` fails → `ecmascript` depends on `ReactFastRefresh` → `base64` depends on `ECMAScript` → cascade.
 
-La queue de `core-runtime` est **séquentielle** : si un package échoue, les packages suivants ne s'exécutent jamais. `react-fast-refresh` est à l'index 7 sur 54, donc 47 packages ne sont jamais exécutés par la queue.
+The core-runtime queue is **sequential**: if a package fails, the following packages never execute. `react-fast-refresh` is at index 7 out of 54, so 47 packages are never executed by the queue.
 
-**Le problème n'est pas l'import** (53/54 s'importent). Le problème est que **le resolver de chemins virtuels** (`npmRequire` / `contextualRequire`) ne résout pas tous les patterns correctement.
+**The problem isn't the import** (53/54 import successfully). The problem is that **the virtual path resolver** (`npmRequire` / `contextualRequire`) doesn't resolve all patterns correctly.
 
-### 2d.5 Diagnostic : pourquoi on reproduit boot.js
+### 2d.5 Diagnosis: why we're reproducing boot.js
 
-**Constat :** On est en train de réécrire la logique de résolution de `npmRequire` de boot.js. C'est exactement ce qu'on voulait éviter.
+**Observation:** We're rewriting the resolution logic of boot.js's `npmRequire`. That's exactly what we wanted to avoid.
 
-**La cause racine :** Le code des packages dans le bundle utilise `meteorInstall` (de modules-runtime) qui crée un filesystem virtuel avec des chemins comme `/node_modules/meteor/X/node_modules/Y`. Quand un module fait `require('Y')`, `meteorInstall` le résout dans le filesystem virtuel, et quand le module n'est pas dans le bundle (c'est un vrai package npm), il appelle `useNode()` qui appelle `npmRequire(absoluteVirtualPath)`.
+**The root cause:** The package code in the bundle uses `meteorInstall` (from modules-runtime) which creates a virtual filesystem with paths like `/node_modules/meteor/X/node_modules/Y`. When a module does `require('Y')`, `meteorInstall` resolves it in the virtual filesystem, and when the module isn't in the bundle (it's a real npm package), it calls `useNode()` which calls `npmRequire(absoluteVirtualPath)`.
 
-`npmRequire` de boot.js sait comment mapper un chemin virtuel vers un vrai chemin disque car il a les `nonLocalNodeModulesPaths` de `program.json`. Notre version simplifiée ne couvre pas tous les patterns.
+boot.js's `npmRequire` knows how to map a virtual path to a real disk path because it has the `nonLocalNodeModulesPaths` from `program.json`. Our simplified version doesn't cover all patterns.
 
-### 2d.6 Décision : 2 stratégies, 2 horizons
+### 2d.6 Decision: 2 strategies, 2 horizons
 
-**Pour le spike (maintenant) : Option 2 — Resolver minimal réécrit**
+**For the spike (now): Option 2 — Rewritten minimal resolver**
 
-Au lieu de copier la logique complexe de boot.js, écrire un resolver minimal qui :
-1. Prend les paths de `program.json`
-2. Map les chemins virtuels `/node_modules/meteor/X/node_modules/Y` → vrai chemin `npm/node_modules/meteor/X/node_modules/Y`
-3. Fallback sur `node_modules/` global du bundle
+Instead of copying the complex logic of boot.js, write a minimal resolver that:
+1. Takes the paths from `program.json`
+2. Maps virtual paths `/node_modules/meteor/X/node_modules/Y` → real path `npm/node_modules/meteor/X/node_modules/Y`
+3. Falls back to the global `node_modules/` of the bundle
 
-C'est plus propre que de copier boot.js mais c'est toujours un resolver custom.
+It's cleaner than copying boot.js but it's still a custom resolver.
 
-**Pour la destination (plus tard) : Option 3 — Le bundler émet des vrais chemins**
+**For the destination (later): Option 3 — The bundler emits real paths**
 
-La vraie solution : modifier le **linker/bundler** pour que les packages émis dans le bundle n'utilisent pas de chemins virtuels. Au lieu de :
+The real solution: modify the **linker/bundler** so that the packages emitted in the bundle don't use virtual paths. Instead of:
 ```js
 meteorInstall({"node_modules":{"meteor":{"modules":{"server.js": function(require) { ... }}}}})
 ```
 
-Le bundler émettrait des vrais modules ESM avec des imports relatifs réels :
+The bundler would emit real ESM modules with actual relative imports:
 ```js
 // packages/modules.mjs
 import reify from '../npm/node_modules/meteor/modules/node_modules/@meteorjs/reify/lib/runtime/index.js';
 ```
 
-Ça élimine complètement `meteorInstall`, `npmRequire`, `useNode`, et le filesystem virtuel. Mais c'est un changement dans le **linker** (`tools/isobuild/linker.js`), pas juste dans le format de sortie.
+This completely eliminates `meteorInstall`, `npmRequire`, `useNode`, and the virtual filesystem. But it's a change in the **linker** (`tools/isobuild/linker.js`), not just in the output format.
 
-**Chemin critique :**
-- Spike (option 2) → valide que le bundle EST importable avec un resolver minimal
-- Si validé → option 3 modifie le linker pour rendre le resolver inutile
-- Résultat final : des vrais modules ESM sans aucun resolver custom
+**Critical path:**
+- Spike (option 2) → validates that the bundle IS importable with a minimal resolver
+- If validated → option 3 modifies the linker to make the resolver unnecessary
+- Final result: real ESM modules without any custom resolver
 
 ---
 
-## Étape 2e — RÉSULTAT : le bundle EST importable
+## Step 2e — RESULT: the bundle IS importable
 
-### Test v6 — resolver minimal + tous les globals
+### Test v6 — minimal resolver + all globals
 
-**Résultat :**
+**Result:**
 ```
-54/54 packages importés ✅
-54 packages enregistrés dans Package ✅
+54/54 packages imported ✅
+54 packages registered in Package ✅
 Meteor.isServer = true ✅
-webapp chargé ✅
-mongo chargé ✅
-ddp-server chargé ✅
+webapp loaded ✅
+mongo loaded ✅
+ddp-server loaded ✅
 ```
 
-Le crash initial (avant ROOT_URL) était `Must pass options.rootUrl or set ROOT_URL` — c'est le comportement **normal** de webapp qui démarre. Avec `ROOT_URL=http://localhost:3000`, tout passe.
+The initial crash (before ROOT_URL) was `Must pass options.rootUrl or set ROOT_URL` — this is the **normal** behavior of webapp starting up. With `ROOT_URL=http://localhost:3000`, everything passes.
 
-### Ce qui a été nécessaire pour que ça marche
+### What was needed to make it work
 
-1. **Globals à setter avant les imports :**
+1. **Globals to set before the imports:**
    - `__meteor_bootstrap__` (startupHooks, serverDir, configJson)
    - `__meteor_runtime_config__` (meteorRelease, gitCommitHash)
    - `process.env.APP_ID`
    - `__METEOR_ASYNC_LOCAL_STORAGE` (AsyncLocalStorage)
 
-2. **Npm.require en global** (remplace l'injection par closure de boot.js)
-   - Doit résoudre les chemins virtuels `/node_modules/meteor/X/node_modules/Y`
-   - Doit résoudre les noms de modules classiques (`express`, `denque`, etc.)
-   - Doit avoir un `.resolve()` pour `useNode()` dans modules-runtime
+2. **Global Npm.require** (replaces boot.js's closure injection)
+   - Must resolve virtual paths `/node_modules/meteor/X/node_modules/Y`
+   - Must resolve standard module names (`express`, `denque`, etc.)
+   - Must have a `.resolve()` for `useNode()` in modules-runtime
 
-3. **npmRequire en global** (specialArg pour modules-runtime)
-   - Même fonction que Npm.require
+3. **Global npmRequire** (specialArg for modules-runtime)
+   - Same function as Npm.require
 
-4. **Profile en global** (specialArg pour modules-runtime)
-   - No-op pour le spike : `function(name, fn) { return fn || function(){}; }`
+4. **Global Profile** (specialArg for modules-runtime)
+   - No-op for the spike: `function(name, fn) { return fn || function(){}; }`
 
-5. **dynamicImportInfo en global** (specialArg pour dynamic-import)
-   - Map des chemins `dynamic/` par architecture
+5. **Global dynamicImportInfo** (specialArg for dynamic-import)
+   - Map of `dynamic/` paths per architecture
 
-6. **Assets en global** (remplace l'injection par closure de boot.js)
-   - Stubs pour le spike (l'app --bare n'utilise pas Assets)
+6. **Global Assets** (replaces boot.js's closure injection)
+   - Stubs for the spike (the --bare app doesn't use Assets)
 
-### Le resolver minimal — ~50 lignes
+### The minimal resolver — ~50 lines
 
-Le cœur : mapper les chemins virtuels de meteorInstall vers les vrais chemins disque.
+The core: map meteorInstall's virtual paths to real disk paths.
 
-Pattern principal : `/node_modules/meteor/X/node_modules/Y` → résolu via `createRequire` depuis le `node_modules` du package X (défini dans `program.json`).
+Main pattern: `/node_modules/meteor/X/node_modules/Y` → resolved via `createRequire` from package X's `node_modules` (defined in `program.json`).
 
-Fallback : `node_modules/` global du bundle.
+Fallback: the bundle's global `node_modules/`.
 
-### Ce qui reste à faire pour le spike complet
+### What remains to be done for the full spike
 
-- [ ] Tester que le serveur HTTP écoute réellement (PORT=3000, curl)
-- [ ] Tester avec une app qui a du code applicatif (pas juste --bare)
-- [ ] Tester avec accounts-password
-- [ ] Tester avec MongoDB (MONGO_URL)
-- [ ] Intégrer ce loader dans le bundler (index.mjs généré)
-- [ ] Tester sous Bun
+- [ ] Test that the HTTP server actually listens (PORT=3000, curl)
+- [ ] Test with an app that has application code (not just --bare)
+- [ ] Test with accounts-password
+- [ ] Test with MongoDB (MONGO_URL)
+- [ ] Integrate this loader into the bundler (generated index.mjs)
+- [ ] Test under Bun
 
-### Conclusion de la phase exploratoire
+### Conclusion of the exploratory phase
 
-**Le bundle serveur Meteor actuel EST importable via ESM** avec :
-- ~10 lignes de setup de globals
-- ~50 lignes de resolver pour les chemins virtuels meteorInstall
-- Aucune modification du code des packages
-- Aucune modification du linker
-- Aucune modification du compilateur
+**The current Meteor server bundle IS importable via ESM** with:
+- ~10 lines of global setup
+- ~50 lines of resolver for meteorInstall virtual paths
+- No modification to the package code
+- No modification to the linker
+- No modification to the compiler
 
-La preuve de concept est validée. Le spike peut passer à l'implémentation dans le bundler.
+The proof of concept is validated. The spike can move on to implementation in the bundler.
 
 ---
 
-## Étape 2f — Le serveur HTTP boot et répond
+## Step 2f — The HTTP server boots and responds
 
-### Test serveur complet
+### Full server test
 
-Ajout de la séquence post-chargement (copiée de boot.js) :
-1. `waitUntilAllLoaded()` — attend que la queue core-runtime finisse
-2. Exécution des `startupHooks` — `__meteor_bootstrap__.startupHooks`
-3. `runMain()` — trouve et appelle `main()` exporté par les packages
+Added the post-loading sequence (copied from boot.js):
+1. `waitUntilAllLoaded()` — waits for the core-runtime queue to finish
+2. Execution of `startupHooks` — `__meteor_bootstrap__.startupHooks`
+3. `runMain()` — finds and calls `main()` exported by the packages
 
-**Résultat :**
+**Result:**
 ```
 Importing 54 packages...
 All packages imported.
@@ -658,61 +658,61 @@ Server started (DAEMON mode).
 === HTTP RESULT: 200 ===
 ```
 
-**Le serveur Meteor boot intégralement via un script ESM (`import`) et répond HTTP 200 sur `curl http://localhost:4000/`.**
+**The Meteor server boots entirely via an ESM script (`import`) and responds HTTP 200 on `curl http://localhost:4000/`.**
 
-Sans MongoDB (pas de MONGO_URL), sans code applicatif (app --bare), mais le serveur HTTP fonctionne.
+Without MongoDB (no MONGO_URL), without application code (app --bare), but the HTTP server works.
 
-### Ce que le test-server.mjs fait (le "ESM boot" complet)
+### What test-server.mjs does (the complete "ESM boot")
 
 ```
-1. Setup globals (~15 lignes)
+1. Setup globals (~15 lines)
    __meteor_bootstrap__, __meteor_runtime_config__, Npm, Assets,
    npmRequire, Profile, dynamicImportInfo, AsyncLocalStorage
 
-2. Import des 54 packages via `await import()` (~5 lignes de boucle)
-   program.json fournit l'ordre
-   currentPackagePath permet au resolver contextuel de fonctionner
+2. Import the 54 packages via `await import()` (~5 lines of loop)
+   program.json provides the order
+   currentPackagePath allows the contextual resolver to work
 
-3. waitUntilAllLoaded() (~2 lignes)
-   La queue core-runtime exécute chaque package séquentiellement
+3. waitUntilAllLoaded() (~2 lines)
+   The core-runtime queue executes each package sequentially
 
-4. Startup hooks (~4 lignes)
-   Même logique que boot.js:448-457
+4. Startup hooks (~4 lines)
+   Same logic as boot.js:448-457
 
-5. runMain() (~10 lignes)
-   Trouve main() dans les exports des packages, l'appelle
-   Retourne 'DAEMON' → le serveur reste en vie
+5. runMain() (~10 lines)
+   Finds main() in the package exports, calls it
+   Returns 'DAEMON' → the server stays alive
 ```
 
-**Total : ~100 lignes de JS remplacent boot.js (510 lignes) + runtime.js (152 lignes) + npm-require.js (~200 lignes) + program.json.**
+**Total: ~100 lines of JS replace boot.js (510 lines) + runtime.js (152 lines) + npm-require.js (~200 lines) + program.json.**
 
-### Prochaines étapes
+### Next steps
 
-- [ ] Tester sous Bun (`bun test-server.mjs`)
-- [ ] Tester avec MONGO_URL (MongoDB réel)
-- [ ] Tester avec une app qui a du code (pas --bare)
-- [ ] Intégrer dans le bundler (générer index.mjs automatiquement)
+- [ ] Test under Bun (`bun test-server.mjs`)
+- [ ] Test with MONGO_URL (real MongoDB)
+- [ ] Test with an app that has code (not --bare)
+- [ ] Integrate into the bundler (generate index.mjs automatically)
 
 ---
 
-## Étape 3 — Test Bun
+## Step 3 — Bun test
 
-### 3.1 Premier essai — ReferenceError strict mode
+### 3.1 First attempt — ReferenceError strict mode
 
-**Bun 1.2.4.** Premier essai avec `test-server.mjs` : crash sur `app/global-imports.js`.
+**Bun 1.2.4.** First attempt with `test-server.mjs`: crash on `app/global-imports.js`.
 
 ```
 ReferenceError: Can't find variable: Mongo
   at app/global-imports.js:4:1
 ```
 
-**Cause :** `global-imports.js` fait des assignations globales implicites (`Mongo = Package.mongo.Mongo` sans `var`/`let`/`const`). Bun exécute en **strict mode** où les assignations implicites sont illegales. Node ne crash pas car les `.js` sont traités comme CJS (mode non-strict) même quand importés via `import()`.
+**Cause:** `global-imports.js` does implicit global assignments (`Mongo = Package.mongo.Mongo` without `var`/`let`/`const`). Bun executes in **strict mode** where implicit assignments are illegal. Node doesn't crash because `.js` files are treated as CJS (non-strict mode) even when imported via `import()`.
 
-**Ce n'est PAS un problème Bun profond** — c'est un fichier généré par le bundler Meteor qui suppose un environnement non-strict. Le fix est trivial.
+**This is NOT a deep Bun problem** — it's a file generated by the Meteor bundler that assumes a non-strict environment. The fix is trivial.
 
-### 3.2 Fix — pre-déclaration des globals
+### 3.2 Fix — pre-declaration of globals
 
-Solution : lire `global-imports.js`, extraire les noms de variables avec une regex, les pré-déclarer sur `globalThis` avant les imports.
+Solution: read `global-imports.js`, extract variable names with a regex, pre-declare them on `globalThis` before the imports.
 
 ```js
 const src = fs.readFileSync(globalImportsPath, 'utf8');
@@ -722,9 +722,9 @@ for (const m of matches) {
 }
 ```
 
-~5 lignes de fix. Pas un shim, pas une émulation — juste une pré-déclaration.
+~5 lines of fix. Not a shim, not an emulation — just a pre-declaration.
 
-### 3.3 Résultat — Bun HTTP 200 ✅
+### 3.3 Result — Bun HTTP 200 ✅
 
 ```
 Importing 54 packages...
@@ -736,35 +736,35 @@ Server started (DAEMON mode).
 === BUN HTTP RESULT: 200 ===
 ```
 
-**Le serveur Meteor boot sous Bun 1.2.4 et répond HTTP 200.**
+**The Meteor server boots under Bun 1.2.4 and responds HTTP 200.**
 
-### 3.4 Résumé : Node vs Bun
+### 3.4 Summary: Node vs Bun
 
 | | Node | Bun |
 |---|---|---|
-| Import des 54 packages | ✅ | ✅ |
+| Import of 54 packages | ✅ | ✅ |
 | core-runtime queue | ✅ | ✅ |
 | Packages registered | 54/54 | 54/54 |
 | Startup hooks | ✅ | ✅ |
 | main() DAEMON | ✅ | ✅ |
 | HTTP 200 | ✅ | ✅ |
-| Fix spécifique nécessaire | Aucun | Pre-déclaration globals (~5 lignes) |
+| Specific fix needed | None | Pre-declaration of globals (~5 lines) |
 
-### 3.5 Observation Bun
+### 3.5 Bun observation
 
-Le seul problème Bun-spécifique est le strict mode pour `global-imports.js`. C'est un fichier **généré par le bundler** — le fix permanent est dans le bundler (émettre `globalThis.Mongo = ...` au lieu de `Mongo = ...`), pas dans le loader.
+The only Bun-specific problem is the strict mode for `global-imports.js`. This is a file **generated by the bundler** — the permanent fix is in the bundler (emit `globalThis.Mongo = ...` instead of `Mongo = ...`), not in the loader.
 
-Pour la destination (option 3 — le bundler émet des vrais modules ESM), `global-imports.js` disparaît complètement car les imports deviennent des `import { Mongo } from './packages/mongo.mjs'`.
+For the destination (option 3 — the bundler emits real ESM modules), `global-imports.js` disappears entirely because the imports become `import { Mongo } from './packages/mongo.mjs'`.
 
 ---
 
-## Étape 4 — App complète (--full) avec MongoDB
+## Step 4 — Full app (--full) with MongoDB
 
-### 4.1 App testée
+### 4.1 App tested
 
-`meteor create --full` génère une app avec : Blaze, FlowRouter, jQuery, Less, MongoDB, Rspack, Mocha, shell-server, accounts. **67 packages** dans le bundle.
+`meteor create --full` generates an app with: Blaze, FlowRouter, jQuery, Less, MongoDB, Rspack, Mocha, shell-server, accounts. **67 packages** in the bundle.
 
-### 4.2 Résultat Node
+### 4.2 Node result
 
 ```
 MONGO_URL=mongodb://localhost:27099/esm-spike ROOT_URL=http://localhost:4010 PORT=4010 node test-full.mjs
@@ -778,11 +778,11 @@ Server started (DAEMON mode).
 === NODE: HTTP 200, body 1722 bytes ===
 ```
 
-### 4.3 Résultat Bun
+### 4.3 Bun result
 
-Même fix que l'app --bare (globals implicites en strict mode) mais élargi à TOUS les fichiers du bundle (pas juste `global-imports.js` — `app/app.js` a le même pattern).
+Same fix as the --bare app (implicit globals in strict mode) but extended to ALL files in the bundle (not just `global-imports.js` — `app/app.js` has the same pattern).
 
-Le fix générique (~10 lignes) scanne tous les `.js` dans `packages/` et `app/` pour pré-déclarer les globals sur `globalThis`.
+The generic fix (~10 lines) scans all `.js` files in `packages/` and `app/` to pre-declare globals on `globalThis`.
 
 ```
 MONGO_URL=mongodb://localhost:27099/esm-spike-bun ROOT_URL=http://localhost:4011 PORT=4011 bun test-full-v2.mjs
@@ -796,32 +796,32 @@ Server started (DAEMON mode).
 === BUN: HTTP 200, body 1722 bytes ===
 ```
 
-### 4.4 Tableau récapitulatif
+### 4.4 Summary table
 
 | | App --bare (54 pkg) | App --full (67 pkg) |
 |---|---|---|
 | **Node** | ✅ HTTP 200 | ✅ HTTP 200, 1722 bytes |
 | **Bun** | ✅ HTTP 200 | ✅ HTTP 200, 1722 bytes |
-| **MongoDB** | Non testé | ✅ Connexion OK |
-| **Blaze** | N/A | ✅ Chargé |
-| **FlowRouter** | N/A | ✅ Chargé |
-| **Rspack** | N/A | ✅ Chargé |
+| **MongoDB** | Not tested | ✅ Connection OK |
+| **Blaze** | N/A | ✅ Loaded |
+| **FlowRouter** | N/A | ✅ Loaded |
+| **Rspack** | N/A | ✅ Loaded |
 
-### 4.5 Fix Bun élargi
+### 4.5 Extended Bun fix
 
-Le bundler Meteor génère des assignations globales implicites (`Mongo = Package.mongo.Mongo`) dans TOUS les fichiers qui ont des globals importés — pas juste `global-imports.js` mais aussi `app/app.js` et potentiellement d'autres.
+The Meteor bundler generates implicit global assignments (`Mongo = Package.mongo.Mongo`) in ALL files that have imported globals — not just `global-imports.js` but also `app/app.js` and potentially others.
 
-**Fix runtime (spike) :** Scanner tous les `.js` du bundle et pré-déclarer les variables.
+**Runtime fix (spike):** Scan all `.js` files in the bundle and pre-declare the variables.
 
-**Fix permanent (bundler) :** Émettre `globalThis.Mongo = ...` au lieu de `Mongo = ...`. Ou mieux : pour le format ESM (option 3), ces assignations deviennent des `import { Mongo } from './packages/mongo.mjs'` et le problème disparaît.
+**Permanent fix (bundler):** Emit `globalThis.Mongo = ...` instead of `Mongo = ...`. Or better: for the ESM format (option 3), these assignments become `import { Mongo } from './packages/mongo.mjs'` and the problem disappears.
 
 ---
 
-## Étape 5 — Benchmark cold start
+## Step 5 — Cold start benchmark
 
-### 5.1 Résultats (app --full, 67 packages, MongoDB)
+### 5.1 Results (app --full, 67 packages, MongoDB)
 
-3 runs chaque, `performance.now()` dans le script, mesure de RSS.
+3 runs each, `performance.now()` in the script, RSS measurement.
 
 | Runtime | Setup | Import | Queue | Startup | Main | **Total** | **RSS** |
 |---|---|---|---|---|---|---|---|
@@ -832,18 +832,18 @@ Le bundler Meteor génère des assignations globales implicites (`Mongo = Packag
 | **Bun** run 2 | 18ms | 810ms | 0ms | 49ms | 5ms | **883ms** | 138 MB |
 | **Bun** run 3 | 15ms | 633ms | 0ms | 43ms | 5ms | **696ms** | 139 MB |
 
-**Observations :**
-- Setup : Bun légèrement plus rapide (15ms vs 22-52ms)
-- Import : comparable, variabilité élevée des deux côtés
-- Total : dans la même fourchette (600-880ms), pas d'écart significatif
-- RSS : identique (~136-139 MB)
-- Queue = 0ms car les packages sont tous synchrones dans cette app
+**Observations:**
+- Setup: Bun slightly faster (15ms vs 22-52ms)
+- Import: comparable, high variability on both sides
+- Total: in the same range (600-880ms), no significant gap
+- RSS: identical (~136-139 MB)
+- Queue = 0ms because the packages are all synchronous in this app
 
-**Conclusion bench :** Pas de gain majeur de Bun en cold start pour cette charge. Le temps dominant est l'import des 67 packages (~600ms), identique sur les deux runtimes. Le gain Bun serait plus visible avec Bun.serve() (pas http.createServer) et pour des workloads HTTP à fort throughput.
+**Benchmark conclusion:** No major Bun gain in cold start for this workload. The dominant time is the import of the 67 packages (~600ms), identical on both runtimes. The Bun gain would be more visible with Bun.serve() (not http.createServer) and for high-throughput HTTP workloads.
 
 ---
 
-## Étape 6 — DDP smoke test
+## Step 6 — DDP smoke test
 
 ### 6.1 Node — DDP OK ✅
 
@@ -859,22 +859,22 @@ WebSocket open
 === DDP SMOKE TEST PASSED ===
 ```
 
-Handshake DDP, method call, subscription — tout passe sur Node.
+Handshake DDP, method call, subscription — everything passes on Node.
 
-### 6.2 Bun — WebSocket upgrade ne fonctionne pas ❌
+### 6.2 Bun — WebSocket upgrade doesn't work ❌
 
-- HTTP : ✅ 200
-- WebSocket upgrade : ❌ timeout, pas de réponse au handshake
+- HTTP: ✅ 200
+- WebSocket upgrade: ❌ timeout, no response to the handshake
 
-**Cause :** Bun ne supporte pas complètement l'événement `upgrade` de `http.createServer`. SockJS (et les transports ws/faye de PR #14231) montent le WebSocket via cet événement. Bun attend que les WebSockets soient gérés via `Bun.serve({ websocket: { ... } })`.
+**Cause:** Bun doesn't fully support the `upgrade` event of `http.createServer`. SockJS (and the ws/faye transports from PR #14231) mount the WebSocket via this event. Bun expects WebSockets to be handled via `Bun.serve({ websocket: { ... } })`.
 
-**Ce n'est PAS un bug de notre spike.** C'est une limitation connue de Bun avec `http.createServer` + upgrade. Le fix serait :
-1. Utiliser `Bun.serve()` au lieu de `http.createServer` (= l'abstraction ServerHost de la section 7 du capability model)
-2. Ou attendre que Bun améliore la compat `http.createServer` upgrade
+**This is NOT a bug in our spike.** It's a known Bun limitation with `http.createServer` + upgrade. The fix would be:
+1. Use `Bun.serve()` instead of `http.createServer` (= the ServerHost abstraction from section 7 of the capability model)
+2. Or wait for Bun to improve `http.createServer` upgrade compatibility
 
-**Impact :** Sous Bun, le serveur HTTP fonctionne mais DDP (WebSocket) ne fonctionne pas. C'est cohérent avec l'analyse : le serveur HTTP et le transport DDP sont les deux seuls concerns qui nécessitent une abstraction runtime-spécifique.
+**Impact:** Under Bun, the HTTP server works but DDP (WebSocket) doesn't work. This is consistent with the analysis: the HTTP server and the DDP transport are the only two concerns that require a runtime-specific abstraction.
 
-### 6.3 Résumé DDP
+### 6.3 DDP summary
 
 | | Node | Bun |
 |---|---|---|
@@ -886,20 +886,20 @@ Handshake DDP, method call, subscription — tout passe sur Node.
 
 ---
 
-## Étape 7 — Bun.serve() + WebSocket DDP natif
+## Step 7 — Bun.serve() + native WebSocket DDP
 
-### 7.1 Architecture du spike
+### 7.1 Spike architecture
 
 ```
-Client (browser ou test)
+Client (browser or test)
     │
     ▼ port 4071
 Bun.serve()
-    ├── HTTP → proxy fetch() vers port 4070 (webapp Express)
-    └── WebSocket → bridge vers StreamServer de ddp-server
+    ├── HTTP → proxy fetch() to port 4070 (webapp Express)
+    └── WebSocket → bridge to StreamServer from ddp-server
             │
             ▼
-    EventEmitter socket compatible SockJS
+    EventEmitter socket compatible with SockJS
     (send, write, on('data'), on('close'))
             │
             ▼
@@ -909,26 +909,26 @@ Bun.serve()
     DDP Server (livedata_server.js)
 ```
 
-### 7.2 L'interface socket pour le StreamServer
+### 7.2 The socket interface for the StreamServer
 
-Le DDP server attend un socket avec :
-- `.on('data', cb)` — réception de messages DDP (JSON strings)
-- `.on('close', cb)` — déconnexion
-- `.send(data)` / `.write(data)` — envoi de messages DDP
-- `._meteorSession` — null initialement, assigné par le DDP server
-- `.setWebsocketTimeout(ms)` — pour les timeouts SockJS (no-op pour nous)
+The DDP server expects a socket with:
+- `.on('data', cb)` — receives DDP messages (JSON strings)
+- `.on('close', cb)` — disconnection
+- `.send(data)` / `.write(data)` — sends DDP messages
+- `._meteorSession` — null initially, assigned by the DDP server
+- `.setWebsocketTimeout(ms)` — for SockJS timeouts (no-op for us)
 
-Implémentation : un `EventEmitter` de Node, avec `.send()` qui appelle `ws.send()` du WebSocket Bun.
+Implementation: a Node `EventEmitter`, with `.send()` that calls `ws.send()` from Bun's WebSocket.
 
-### 7.3 Accès au StreamServer
+### 7.3 Accessing the StreamServer
 
-`Package['ddp-server'].DDPServer` n'expose pas `stream_server` directement.
-Le bon chemin : **`Package.meteor.Meteor.server.stream_server`** (le Meteor.server est un `Server` créé à ddp-server.js:2135).
+`Package['ddp-server'].DDPServer` doesn't expose `stream_server` directly.
+The right path: **`Package.meteor.Meteor.server.stream_server`** (the Meteor.server is a `Server` created at ddp-server.js:2135).
 
-`streamServer.registration_callbacks` contient le callback qui setup le handler DDP (parseDDP, processMessage, etc.).
-`streamServer.open_sockets` track les sockets ouverts.
+`streamServer.registration_callbacks` contains the callback that sets up the DDP handler (parseDDP, processMessage, etc.).
+`streamServer.open_sockets` tracks the open sockets.
 
-### 7.4 Résultat
+### 7.4 Result
 
 ```
 === HTTP ===
@@ -946,60 +946,60 @@ WebSocket open
 === DDP SMOKE TEST PASSED ===
 ```
 
-### 7.5 Résumé complet Node vs Bun
+### 7.5 Full summary Node vs Bun
 
 | | Node (ESM loader) | Bun (ESM loader) | Bun (+ Bun.serve()) |
 |---|---|---|---|
 | Import 67 packages | ✅ | ✅ | ✅ |
 | core-runtime queue | ✅ | ✅ | ✅ |
 | HTTP 200 | ✅ | ✅ | ✅ (proxy) |
-| WebSocket open | ✅ | ❌ (http upgrade) | ✅ (natif) |
+| WebSocket open | ✅ | ❌ (http upgrade) | ✅ (native) |
 | DDP connect | ✅ | ❌ | ✅ |
 | DDP method | ✅ | ❌ | ✅ |
 | DDP subscription | ✅ | ❌ | ✅ |
 | MongoDB | ✅ | ✅ | ✅ |
 
-### 7.6 Ce que ça signifie
+### 7.6 What this means
 
-Le spike Bun est **fonctionnellement complet** : HTTP + DDP + MongoDB sous Bun.
+The Bun spike is **functionally complete**: HTTP + DDP + MongoDB under Bun.
 
-L'architecture Bun.serve() comme proxy est un pattern viable qui pourrait devenir un 5ème transport pluggable dans PR #14231, ou une variante du ServerHost abstrait.
+The Bun.serve() as proxy architecture is a viable pattern that could become a 5th pluggable transport in PR #14231, or a variant of the abstract ServerHost.
 
-Le bridge EventEmitter est minimal (~15 lignes). Il ne shim rien — il traduit l'interface WebSocket Bun en l'interface socket que le StreamServer attend déjà.
+The EventEmitter bridge is minimal (~15 lines). It doesn't shim anything — it translates the Bun WebSocket interface into the socket interface that the StreamServer already expects.
 
-### 7.7 Notes pour la destination
+### 7.7 Notes for the destination
 
-Pour un vrai support Bun en production, `Bun.serve()` ne devrait pas être un proxy devant webapp. Il devrait ÊTRE le serveur principal :
-- HTTP direct via fetch handler (pas de proxy vers Express)
-- WebSocket natif (pas de bridge)
-- Middleware Express remplacé par des handlers fetch
+For real Bun support in production, `Bun.serve()` should not be a proxy in front of webapp. It should BE the main server:
+- Direct HTTP via fetch handler (no proxy to Express)
+- Native WebSocket (no bridge)
+- Express middleware replaced by fetch handlers
 
-C'est l'abstraction ServerHost du capability model — mais pour le spike, le proxy suffit pour prouver que DDP fonctionne.
-
----
-
-## Étape 8 — Prochaines étapes
-
-- [ ] Intégrer le loader ESM dans le bundler (`meteor build --format=esm`)
-- [ ] Tester avec accounts-password (login flow complet)
-- [ ] Considérer Bun.serve() comme 5ème transport dans PR #14231
+This is the ServerHost abstraction from the capability model — but for the spike, the proxy is sufficient to prove that DDP works.
 
 ---
 
-## Observations et découvertes
+## Step 8 — Next steps
 
-- L'ordre de dépendance est **déjà calculé** par isobuild dans `_determineLoadOrder()`. C'est un tri topologique. On n'a pas à le refaire.
-- `JsImageTarget.write()` itère déjà sur `this.jsToLoad[]` dans le bon ordre. C'est là qu'on génère les imports ESM.
-- Le format `"javascript-image-pre1"` dans program.json suggère qu'un format v2 était envisagé mais jamais implémenté.
-- `npm-rebuild.js` est exécuté en postinstall (pas au boot), donc il reste nécessaire même en ESM.
-- Les assets statiques (fichiers privés des packages) sont copiés dans `assets/` et référencés dans program.json. En ESM, il faudra un mécanisme alternatif pour `Assets.getText()`.
-- **CRITIQUE :** Les packages utilisent `Package["core-runtime"].queue()` pour s'enregistrer, pas des IIFE simples. Le système de queue de core-runtime est le vrai mécanisme d'orchestration. boot.js ne fait que charger les fichiers — c'est queue() qui gère l'ordre d'exécution.
-- Les fichiers .js du bundle sont déjà exécutables tels quels — leur contenu appelle `queue()` au top-level. Un simple `import './packages/meteor.js'` devrait suffire pour déclencher l'enregistrement.
-- 54 packages pour une app --bare + webapp. C'est beaucoup mais c'est attendu (meteor-base tire tout l'écosystème).
-- Le format `"javascript-image-pre1"` dans program.json n'a jamais eu de "pre2". C'est le seul format depuis la création.
-- boot.js ajoute un wrapping SUPPLÉMENTAIRE `(function(Npm, Assets){...})` autour du contenu des fichiers. Ce wrapping injecte Npm et Assets. En ESM, il faudra un autre mécanisme pour ces deux objets.
-- **CRITIQUE :** Le filesystem virtuel de `meteorInstall` (modules-runtime) est le vrai obstacle. Les packages ne font pas juste `require('express')` — ils passent par un arbre virtuel `/node_modules/meteor/X/node_modules/Y` résolu par `meteorInstall` + `npmRequire`. C'est plus profond que le wrapping boot.js.
-- **Deux horizons clairs :** Spike = resolver minimal (option 2, rapide). Destination = le bundler émet des vrais chemins (option 3, propre, modifie le linker).
-- Les fichiers du bundle sont importables — 53/54 passent l'import. Le blocage est dans l'EXÉCUTION de la queue core-runtime quand un package a un `require()` qui passe par le filesystem virtuel et que notre resolver ne couvre pas le pattern.
-- `react-fast-refresh` est à l'index 7/54 dans l'ordre de chargement. Son échec bloque les 47 packages suivants car la queue core-runtime est séquentielle.
-- `Package._define(name, exports)` est appelé par la queue APRÈS l'exécution réussie d'un package. C'est pour ça qu'on ne voit que 7 packages enregistrés malgré 53 imports réussis — l'import charge le code mais la queue ne l'exécute pas tant que le précédent n'a pas fini.
+- [ ] Integrate the ESM loader into the bundler (`meteor build --format=esm`)
+- [ ] Test with accounts-password (full login flow)
+- [ ] Consider Bun.serve() as 5th transport in PR #14231
+
+---
+
+## Observations and discoveries
+
+- The dependency order is **already computed** by isobuild in `_determineLoadOrder()`. It's a topological sort. We don't need to redo it.
+- `JsImageTarget.write()` already iterates over `this.jsToLoad[]` in the correct order. That's where we generate the ESM imports.
+- The `"javascript-image-pre1"` format in program.json suggests that a v2 format was envisioned but never implemented.
+- `npm-rebuild.js` is executed in postinstall (not at boot), so it remains necessary even in ESM.
+- Static assets (package private files) are copied into `assets/` and referenced in program.json. In ESM, an alternative mechanism for `Assets.getText()` will be needed.
+- **CRITICAL:** Packages use `Package["core-runtime"].queue()` to register, not simple IIFEs. The core-runtime queue system is the real orchestration mechanism. boot.js only loads the files — it's queue() that manages the execution order.
+- The .js files in the bundle are already executable as-is — their content calls `queue()` at the top level. A simple `import './packages/meteor.js'` should be enough to trigger registration.
+- 54 packages for a --bare + webapp app. That's a lot but expected (meteor-base pulls in the entire ecosystem).
+- The `"javascript-image-pre1"` format in program.json never had a "pre2". It's the only format since creation.
+- boot.js adds an ADDITIONAL wrapping `(function(Npm, Assets){...})` around the file contents. This wrapping injects Npm and Assets. In ESM, another mechanism will be needed for these two objects.
+- **CRITICAL:** The virtual filesystem of `meteorInstall` (modules-runtime) is the real obstacle. Packages don't just do `require('express')` — they go through a virtual tree `/node_modules/meteor/X/node_modules/Y` resolved by `meteorInstall` + `npmRequire`. It goes deeper than the boot.js wrapping.
+- **Two clear horizons:** Spike = minimal resolver (option 2, fast). Destination = the bundler emits real paths (option 3, clean, modifies the linker).
+- The bundle files are importable — 53/54 pass the import. The blocker is in the EXECUTION of the core-runtime queue when a package has a `require()` that goes through the virtual filesystem and our resolver doesn't cover the pattern.
+- `react-fast-refresh` is at index 7/54 in the load order. Its failure blocks the 47 following packages because the core-runtime queue is sequential.
+- `Package._define(name, exports)` is called by the queue AFTER the successful execution of a package. That's why we only see 7 registered packages despite 53 successful imports — the import loads the code but the queue doesn't execute it as long as the previous one hasn't finished.

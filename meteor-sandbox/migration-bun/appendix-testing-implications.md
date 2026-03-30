@@ -1,50 +1,50 @@
 # Appendix — Testing Implications of an ESM Server Bundle
 
-**Status :** Note stratégique — conséquence potentielle du bundle ESM, pas un chantier immédiat.
-**Prérequis :** Le proto ESM fonctionne (`meteor build --format=esm` produit des modules importables).
+**Status:** Strategic note — potential consequence of the ESM bundle, not an immediate workstream.
+**Prerequisite:** The ESM prototype works (`meteor build --format=esm` produces importable modules).
 
 ---
 
-## Si le bundle ESM marche, les tests se simplifient
+## If the ESM bundle works, testing gets simpler
 
-Des modules serveur réellement importables rendent possibles :
+Truly importable server modules make the following possible:
 
-- **Tests unitaires serveur avec `bun:test` / `node:test`** — importer une méthode, l'appeler, assert. Pas besoin de démarrer un serveur Meteor complet pour tester une fonction.
-- **Moins de dépendance à Tinytest / test drivers** — le test runner est le runtime lui-même, pas un package Meteor.
-- **Séparation unit / integration / e2e plus claire** — unit = import direct, integration = serveur démarré, e2e = Playwright.
+- **Server unit tests with `bun:test` / `node:test`** — import a method, call it, assert. No need to start a full Meteor server to test a function.
+- **Less dependency on Tinytest / test drivers** — the test runner is the runtime itself, not a Meteor package.
+- **Clearer unit / integration / e2e separation** — unit = direct import, integration = server started, e2e = Playwright.
 
 ```js
-// Exemple : test unitaire d'une method (possible seulement avec des modules ESM importables)
+// Example: unit test of a method (only possible with importable ESM modules)
 import { test, expect } from 'bun:test';
 import { createTask } from '../imports/methods/tasks.mjs';
 
-test('createTask valide le texte', () => {
+test('createTask validates text', () => {
   expect(() => createTask({ text: '' })).toThrow();
   expect(() => createTask({ text: 'Hello' })).not.toThrow();
 });
 ```
 
-## Ce qui resterait nécessaire
+## What would still be necessary
 
-- **Playwright** pour les tests browser réels (happy-dom/jsdom ne couvrent pas tout)
-- **Tests d'intégration avec serveur démarré** pour les flux DDP / publications / auth
-- **Helpers de bootstrap/contexte** pour les tests qui ont besoin d'un contexte utilisateur, d'un DDP invocation context, ou d'une base test — "moins besoin de démarrer tout Meteor" ≠ "plus jamais besoin"
-- **Tests de réactivité client** — même avec un store pluggable, la propagation des changements et les effets sur le client doivent être testés
+- **Playwright** for real browser tests (happy-dom/jsdom don't cover everything)
+- **Integration tests with a running server** for DDP / publications / auth flows
+- **Bootstrap/context helpers** for tests that need a user context, a DDP invocation context, or a test database — "less need to start all of Meteor" does not mean "never need to again"
+- **Client reactivity tests** — even with a pluggable store, change propagation and client-side effects must be tested
 
-## Ce qui pourrait être challengé plus tard
+## What could be challenged later
 
-| Brique actuelle | Pourquoi la challenger | Remplacement possible |
+| Current component | Why challenge it | Possible replacement |
 |---|---|---|
-| Tinytest | Test framework custom de 2012 | `bun:test` / `node:test` / Vitest |
-| Test drivers (packages) | Bridge Tinytest → browser, complexité inutile | Playwright direct |
-| `meteor test-packages` | Démarre un serveur complet pour du unitaire | Import direct + runner natif |
+| Tinytest | Custom test framework from 2012 | `bun:test` / `node:test` / Vitest |
+| Test drivers (packages) | Bridge Tinytest to browser, unnecessary complexity | Playwright direct |
+| `meteor test-packages` | Starts a full server for unit testing | Direct import + native runner |
 
-## Ce qui ne change pas
+## What doesn't change
 
-- E2E = Playwright (pas Meteor-spécifique, pas de changement)
-- Tests d'intégration = serveur + client DDP (le protocole ne change pas)
-- CI = même matrice, juste le runner qui change
+- E2E = Playwright (not Meteor-specific, no change)
+- Integration tests = server + DDP client (the protocol doesn't change)
+- CI = same matrix, just the runner changes
 
-## Dépendance
+## Dependency
 
-Tout ceci est conditionnel au succès du proto ESM. Si le bundle ESM ne produit pas des modules importables, cette vision reste hypothétique.
+All of this is conditional on the success of the ESM prototype. If the ESM bundle doesn't produce importable modules, this vision remains hypothetical.

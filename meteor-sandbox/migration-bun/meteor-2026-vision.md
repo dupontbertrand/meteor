@@ -1,46 +1,46 @@
 # What We Would Challenge If Meteor Was Redesigned Today
 
-**Date :** 2026-03-30
-**Auteur :** dupontbertrand (with Claude analysis)
-**Status :** Vision document
-**Contexte :** Croisement entre l'analyse capability-first et le thread forum ["What if Meteor was created in 2025"](https://forums.meteor.com/t/what-if-meteor-was-created-in-2025/63566)
+**Date:** 2026-03-30
+**Author:** dupontbertrand (with Claude analysis)
+**Status:** Vision document
+**Context:** Intersection between the capability-first analysis and the forum thread ["What if Meteor was created in 2025"](https://forums.meteor.com/t/what-if-meteor-was-created-in-2025/63566)
 
 ---
 
-## Travail déjà fait
+## Work already done
 
-**PR #14231 — Transport DDP pluggable** (MERGED ✅)
-- 4 transports : SockJS (défaut), faye, ws, uWebSockets.js
-- Interface : `{ name, setup(httpServer, pathPrefix, options) => EventEmitter }`
-- Benchmarks : uws 14,300 calls/sec vs sockjs 8,156 (+75%)
+**PR #14231 — Pluggable DDP transport** (MERGED)
+- 4 transports: SockJS (default), faye, ws, uWebSockets.js
+- Interface: `{ name, setup(httpServer, pathPrefix, options) => EventEmitter }`
+- Benchmarks: uws 14,300 calls/sec vs sockjs 8,156 (+75%)
 
-**PR #14235 — Serializer DDP pluggable** (open, prototype)
-- Architecture 3 couches : `toWireMessage()` → `serialize()` → `transport.send()`
-- CBOR : -23% wire size (dates), **-86 à -90%** (binary), **+38%** throughput 1KB
-- Interface : `{ name, wireFormat: 'text'|'binary', serialize(wireMsg), deserialize(raw) }`
+**PR #14235 — Pluggable DDP serializer** (open, prototype)
+- 3-layer architecture: `toWireMessage()` -> `serialize()` -> `transport.send()`
+- CBOR: -23% wire size (dates), **-86 to -90%** (binary), **+38%** throughput 1KB
+- Interface: `{ name, wireFormat: 'text'|'binary', serialize(wireMsg), deserialize(raw) }`
 
 ---
 
-## Convergences avec le thread forum
+## Convergences with the forum thread
 
-| Idée du thread | Statut |
+| Thread idea | Status |
 |---|---|
-| Remplacer SockJS par WebSocket natif | **✅ PR #14231 merged** — 4 transports disponibles |
-| Serializer pluggable (EJSON → CBOR) | **🔶 PR #14235 open** — prototype fonctionnel |
-| Bundle ESM standard | À faire — spike bundler (voir `meteor-esm-bundle-prototype.md`) |
-| Moins de tribal knowledge | Découle du bundle ESM |
-| DISABLE_SOCKJS devrait être le défaut | Facilité par PR #14231 (changer le défaut = 1 ligne) |
+| Replace SockJS with native WebSocket | **PR #14231 merged** — 4 transports available |
+| Pluggable serializer (EJSON -> CBOR) | **PR #14235 open** — working prototype |
+| Standard ESM bundle | To do — bundler spike (see `meteor-esm-bundle-prototype.md`) |
+| Less tribal knowledge | Follows from the ESM bundle |
+| DISABLE_SOCKJS should be the default | Facilitated by PR #14231 (changing the default = 1 line) |
 
 ---
 
-## 1. Change streams au lieu d'oplog tailing
+## 1. Change streams instead of oplog tailing
 
-**Consensus forum :** jam : "Must eliminate oplog tailing in favor of change streams."
+**Forum consensus:** jam: "Must eliminate oplog tailing in favor of change streams."
 
-Change streams sont supportés par MongoDB 4.0+. `jam:pub-sub` les utilise déjà. L'observe driver devrait être pluggable :
+Change streams are supported by MongoDB 4.0+. `jam:pub-sub` already uses them. The observe driver should be pluggable:
 
 ```js
-// packages/mongo-observe.mjs — contrat abstrait
+// packages/mongo-observe.mjs — abstract contract
 export function observeChanges(collection, query, callbacks) {
   const strategy = process.env.METEOR_OBSERVE_STRATEGY || 'change-stream';
   return strategies[strategy](collection, query, callbacks);
@@ -49,17 +49,17 @@ export function observeChanges(collection, query, callbacks) {
 
 ---
 
-## 2. Réactivité DB-agnostique
+## 2. DB-agnostic reactivity
 
-**italojs (forum) :** "real-time data from any source: queue systems (ZMQ, Redis Streams, Kafka), external APIs, or application events."
+**italojs (forum):** "real-time data from any source: queue systems (ZMQ, Redis Streams, Kafka), external APIs, or application events."
 
 ```js
-// packages/reactive-source.mjs — contrat
+// packages/reactive-source.mjs — contract
 export function createReactiveSource({ watch, unwatch }) {
   return { watch, unwatch };
 }
 
-// packages/mongo-reactive.mjs — implémentation MongoDB
+// packages/mongo-reactive.mjs — MongoDB implementation
 export const mongoSource = createReactiveSource({
   watch: (query, cb) => collection.watch(query.pipeline).on('change', cb),
   unwatch: (handle) => handle.close(),
@@ -71,17 +71,17 @@ export const mongoSource = createReactiveSource({
 
 ---
 
-## 3. Webapp + Accounts : intégration HTTP fetch-native
+## 3. Webapp + Accounts: fetch-native HTTP integration
 
-**ceigey (forum) :** "API endpoint serving needs Accounts/Webapp integration."
+**ceigey (forum):** "API endpoint serving needs Accounts/Webapp integration."
 
-Aujourd'hui, exposer une API REST authentifiée = tribal knowledge (connectHandlers + vérification manuelle de token). La solution :
+Today, exposing an authenticated REST API = tribal knowledge (connectHandlers + manual token verification). The solution:
 
 ```js
-// packages/webapp.mjs — routeur Web Standard (fetch-based)
+// packages/webapp.mjs — Web Standard router (fetch-based)
 export function addRoute(method, path, handler) { /* ... */ }
 
-// packages/accounts-middleware.mjs — middleware d'auth
+// packages/accounts-middleware.mjs — auth middleware
 import { getUser } from './accounts-base.mjs';
 export function authenticated(handler) {
   return async (req) => {
@@ -92,7 +92,7 @@ export function authenticated(handler) {
   };
 }
 
-// Code utilisateur — simple, documenté
+// User code — simple, documented
 import { addRoute } from 'meteor/webapp';
 import { authenticated } from 'meteor/accounts-middleware';
 
@@ -103,109 +103,109 @@ addRoute('GET', '/api/invoices', authenticated(async (req, { user }) => {
 }));
 ```
 
-L'API `fetch` (Request/Response) est un Web Standard supporté par Node 18+ et Bun. Code portable par design.
+The `fetch` API (Request/Response) is a Web Standard supported by Node 18+ and Bun. Portable code by design.
 
 ---
 
-## 4. Convergence npm/Atmosphere
+## 4. npm/Atmosphere convergence
 
-**ceigey (forum) :** "NPM-Atmosphere duality requiring workarounds."
+**ceigey (forum):** "NPM-Atmosphere duality requiring workarounds."
 
-Dans un bundle ESM, la distinction disparaît au runtime : un package Atmosphere et un package npm sont tous deux des modules ESM. La distinction ne reste que dans le build system (package.js vs package.json).
+In an ESM bundle, the distinction disappears at runtime: an Atmosphere package and an npm package are both ESM modules. The distinction only remains in the build system (package.js vs package.json).
 
-Chemin de migration : les packages Atmosphere qui fonctionnent en ESM sont, de facto, des modules npm avec un wrapper de build.
+Migration path: Atmosphere packages that work in ESM are, de facto, npm modules with a build wrapper.
 
 ---
 
-## 5. Tribal knowledge → code explicite
+## 5. Tribal knowledge -> explicit code
 
-**mvogt22 (forum) :** "new developers shouldn't have to dig through all the documentation and history."
+**mvogt22 (forum):** "new developers shouldn't have to dig through all the documentation and history."
 
-| Tribal knowledge actuel | Comment le bundle ESM l'élimine |
+| Current tribal knowledge | How the ESM bundle eliminates it |
 |---|---|
-| "program.json est le manifest de boot.js" | Pas de manifest — les imports sont dans le code |
-| "Reify transforme les imports en module.link" | Pas de Reify — ESM natif |
-| "vm.runInThisContext wrappe le code avec Npm/Assets" | Pas de vm — modules normaux |
-| "Package.meteor.Meteor est l'export" | `import { Meteor } from './packages/meteor.mjs'` — standard |
-| "Npm.require résout dans plusieurs node_modules" | `import` standard |
-| "source-map-support monkey-patche Error.prepareStackTrace" | Source maps natives |
-| "SockJS encapsule WebSocket + fallback XHR" | WebSocket direct |
-| "DDPCommon.parseDDP est overridable" | `setSerializer()` exporté explicitement |
+| "program.json is the boot.js manifest" | No manifest — imports are in the code |
+| "Reify transforms imports into module.link" | No Reify — native ESM |
+| "vm.runInThisContext wraps code with Npm/Assets" | No vm — normal modules |
+| "Package.meteor.Meteor is the export" | `import { Meteor } from './packages/meteor.mjs'` — standard |
+| "Npm.require resolves across multiple node_modules" | Standard `import` |
+| "source-map-support monkey-patches Error.prepareStackTrace" | Native source maps |
+| "SockJS encapsulates WebSocket + XHR fallback" | Direct WebSocket |
+| "DDPCommon.parseDDP is overridable" | `setSerializer()` explicitly exported |
 
-**Le bundle ESM ne documente pas le tribal knowledge — il l'élimine.**
+**The ESM bundle doesn't document tribal knowledge — it eliminates it.**
 
 ---
 
-## 6. PWA, Capacitor et Electron
+## 6. PWA, Capacitor, and Electron
 
-### Ce qui change entre les cibles
+### What changes between targets
 
-| Cible | Serveur | Client servi comment | DDP | Auth |
+| Target | Server | Client served how | DDP | Auth |
 |---|---|---|---|---|
-| **Web** | Distant | HTTP depuis le serveur | WebSocket → serveur | Cookies + token |
-| **PWA** | Distant | Service worker cache + HTTP | WebSocket → serveur | Cookies + token |
-| **Capacitor** | Distant | Assets locaux (localhost) | WebSocket → serveur distant | **Token only** |
-| **Electron** | Local ou distant | Renderer → localhost ou fichiers | WebSocket local/distant | Token ou session |
+| **Web** | Remote | HTTP from the server | WebSocket -> server | Cookies + token |
+| **PWA** | Remote | Service worker cache + HTTP | WebSocket -> server | Cookies + token |
+| **Capacitor** | Remote | Local assets (localhost) | WebSocket -> remote server | **Token only** |
+| **Electron** | Local or remote | Renderer -> localhost or files | WebSocket local/remote | Token or session |
 
-### Décisions à prendre dès le design ESM
+### Decisions to make during ESM design
 
-| Décision | Pourquoi maintenant | Coût de ne pas y penser |
+| Decision | Why now | Cost of not thinking about it |
 |---|---|---|
-| Config externalisée (pas inline HTML) | Capacitor/Electron ont des ROOT_URL différents | Refonte du système de config |
-| Build output séparable (server / client / mobile) | Capacitor a besoin des assets sans le serveur | Restructuration du bundler |
-| Auth Bearer dans les routes HTTP | Capacitor n'a pas de cookies | Réécriture du middleware auth |
-| Endpoint de version pour OTA | Hot code push Capacitor | Pas d'update mobile sans app store |
-| Service worker dans le pipeline de build | PWA offline | Ajout ad-hoc, mal intégré |
+| Externalized config (not inline HTML) | Capacitor/Electron have different ROOT_URLs | Config system overhaul |
+| Separable build output (server / client / mobile) | Capacitor needs assets without the server | Bundler restructuring |
+| Bearer auth in HTTP routes | Capacitor doesn't have cookies | Auth middleware rewrite |
+| Version endpoint for OTA | Capacitor hot code push | No mobile update without app store |
+| Service worker in the build pipeline | PWA offline | Ad-hoc addition, poorly integrated |
 
-### Ce qui est déjà compatible
+### What is already compatible
 
-- DDP est **déjà token-based** → Capacitor fonctionne pour sub/methods
-- Le format `index.mjs` est déjà démarrable par Electron
-- Le transport pluggable (PR #14231) marche pour toutes les cibles
+- DDP is **already token-based** -> Capacitor works for sub/methods
+- The `index.mjs` format is already startable by Electron
+- The pluggable transport (PR #14231) works for all targets
 
 ---
 
-## 7. Minimongo : challenger, abstraire, ou remplacer ?
+## 7. Minimongo: challenge, abstract, or replace?
 
-### Ce qui ne va plus
+### What no longer works well
 
-| Limitation | Impact | Gravité |
+| Limitation | Impact | Severity |
 |---|---|---|
-| **Pas d'index** — scan linéaire O(n) | Performance > 1000 docs | Haute |
-| **Pas de persistance** — tout en mémoire | Pas d'offline, re-fetch au refresh | Haute |
-| **Pas de pagination** | Datasets larges impossibles | Moyenne |
-| **MergeBox serveur** | RAM ∝ clients × subs × docs | Haute |
-| **Couplé à MongoDB** | Query syntax = MongoDB syntax | Moyenne |
-| **Pas de CRDT** | Pas de collab temps réel | Moyenne (croissante) |
+| **No indexes** — linear O(n) scan | Performance > 1000 docs | High |
+| **No persistence** — all in memory | No offline, re-fetch on refresh | High |
+| **No pagination** | Large datasets impossible | Medium |
+| **Server-side MergeBox** | RAM proportional to clients x subs x docs | High |
+| **Coupled to MongoDB** | Query syntax = MongoDB syntax | Medium |
+| **No CRDT** | No real-time collaboration | Medium (growing) |
 
-### Paysage 2026 des stores client réactifs
+### 2026 landscape of reactive client stores
 
-| Solution | Réactivité | Persistance | Optimistic | SQL syntax | Taille | Forces |
+| Solution | Reactivity | Persistence | Optimistic | SQL syntax | Size | Strengths |
 |---|---|---|---|---|---|---|
-| **Minimongo** | Tracker | Non | Oui | Non (MongoDB) | ~100kB | Intégré Meteor |
-| **TinyBase** | Listeners | IndexedDB, OPFS | Oui | Oui (TinyQL) | **6-13kB** | CRDT natif, 0 deps |
-| **RxDB** | RxJS | IndexedDB, SQLite WASM | Oui | Non (MongoDB-like) | ~50kB | Mature, indexes |
-| **PowerSync** | Réactif | SQLite WASM | Oui | **Oui (SQL natif)** | ~60kB | Mobile-first |
-| **SignalDB** | Signals | IndexedDB | Oui | Non (MongoDB-like) | ~20kB | Signal-based |
-| **Zero** | Réactif | IndexedDB | Oui | **Oui (ZQL)** | ~40kB | SQL queries |
+| **Minimongo** | Tracker | No | Yes | No (MongoDB) | ~100kB | Integrated with Meteor |
+| **TinyBase** | Listeners | IndexedDB, OPFS | Yes | Yes (TinyQL) | **6-13kB** | Native CRDT, 0 deps |
+| **RxDB** | RxJS | IndexedDB, SQLite WASM | Yes | No (MongoDB-like) | ~50kB | Mature, indexes |
+| **PowerSync** | Reactive | SQLite WASM | Yes | **Yes (native SQL)** | ~60kB | Mobile-first |
+| **SignalDB** | Signals | IndexedDB | Yes | No (MongoDB-like) | ~20kB | Signal-based |
+| **Zero** | Reactive | IndexedDB | Yes | **Yes (ZQL)** | ~40kB | SQL queries |
 
-### Interface pluggable pour le store client
+### Pluggable interface for the client store
 
 ```js
 interface ClientStore {
-  // Réception des données serveur
+  // Server data reception
   applyAdded(collection, id, fields);
   applyChanged(collection, id, fields, cleared);
   applyRemoved(collection, id);
 
-  // Queries réactives
-  find(collection, selector, options) → ReactiveCursor;
-  findOne(collection, selector, options) → ReactiveValue;
+  // Reactive queries
+  find(collection, selector, options) -> ReactiveCursor;
+  findOne(collection, selector, options) -> ReactiveValue;
 
   // Mutations (optimistic)
-  insert(collection, doc) → id;
-  update(collection, selector, modifier) → count;
-  remove(collection, selector) → count;
+  insert(collection, doc) -> id;
+  update(collection, selector, modifier) -> count;
+  remove(collection, selector) -> count;
 
   // Lifecycle
   clear(collection);
@@ -214,93 +214,93 @@ interface ClientStore {
 }
 ```
 
-### TinyBase — le candidat le plus naturel
+### TinyBase — the most natural candidate
 
-| Dimension | TinyBase | Fit Meteor |
+| Dimension | TinyBase | Meteor fit |
 |---|---|---|
-| Taille | 6.2kB gzip, 0 deps | ✅ 10x plus petit que Minimongo |
-| CRDT natif | `MergeableStore` | ✅ Ce que Minimongo n'a pas |
-| Persistance | IndexedDB, OPFS, SQLite, Bun SQLite | ✅ Offline gratuit |
-| Sync | `WsSynchronizer` WebSocket, `BroadcastChannel` multi-tab | ✅ Converge avec DDP |
-| Query | TinyQL (SQL-adjacent) | 🔶 Pas MongoDB selectors |
-| Framework | React hooks natifs | 🔶 Blaze = adaptateur nécessaire |
-| Données | Tables/Rows/Cells | 🔶 Mapping naturel : Collection=Table, Doc=Row |
+| Size | 6.2kB gzip, 0 deps | 10x smaller than Minimongo |
+| Native CRDT | `MergeableStore` | What Minimongo doesn't have |
+| Persistence | IndexedDB, OPFS, SQLite, Bun SQLite | Free offline |
+| Sync | `WsSynchronizer` WebSocket, `BroadcastChannel` multi-tab | Converges with DDP |
+| Query | TinyQL (SQL-adjacent) | Not MongoDB selectors |
+| Framework | Native React hooks | Blaze = adapter needed |
+| Data | Tables/Rows/Cells | Natural mapping: Collection=Table, Doc=Row |
 
-**3 gains majeurs vs Minimongo :**
-1. **Offline gratuit** — persister IndexedDB
-2. **Multi-tab gratuit** — BroadcastChannel sync
-3. **Pas de MergeBox serveur** — CRDT merge côté client → RAM serveur divisée
+**3 major gains vs Minimongo:**
+1. **Free offline** — IndexedDB persistence
+2. **Free multi-tab** — BroadcastChannel sync
+3. **No server-side MergeBox** — client-side CRDT merge -> server RAM divided
 
-**L'alignement sync :** TinyBase `WsServer` route les messages entre clients sans stocker de données — **exactement le rôle d'un serveur DDP**. Le `MergeableStore` gère le merge CRDT — **ce que MergeBox fait, mais mieux**.
+**Sync alignment:** TinyBase `WsServer` routes messages between clients without storing data — **exactly the role of a DDP server**. The `MergeableStore` handles CRDT merge — **what MergeBox does, but better**.
 
-### Séquence recommandée
+### Recommended sequence
 
-1. Définir l'interface `ClientStore` (document de design)
-2. Refactorer Minimongo pour implémenter cette interface (sans changer l'API publique)
-3. Ajouter la persistance IndexedDB à Minimongo (quick win)
-4. Créer un adaptateur TinyBase comme POC
-5. Proposer le store pluggable comme feature opt-in
+1. Define the `ClientStore` interface (design document)
+2. Refactor Minimongo to implement this interface (without changing the public API)
+3. Add IndexedDB persistence to Minimongo (quick win)
+4. Create a TinyBase adapter as a POC
+5. Propose the pluggable store as an opt-in feature
 
 ---
 
-## 8. Audit des packages Meteor
+## 8. Meteor package audit
 
-### 🔴 À remplacer ou supprimer
+### Red — Replace or remove
 
-| Brique | Pourquoi | Remplacement |
+| Component | Why | Replacement |
 |---|---|---|
-| **Reify / modules-runtime** | ESM natif existe | Bundle ESM |
-| **source-map-support** | Node/Bun gèrent nativement | Drop |
-| **es5-shim** | Aucun browser 2026 n'en a besoin | Supprimer |
-| **SockJS** | WebSocket universel | ✅ PR #14231 |
-| **accounts-ui** | Templates Blaze datés | Supprimer du core |
-| **mobile-experience / launch-screen / crosswalk** | Cordova obsolète | Supprimer |
-| **autopublish / insecure** | Antipatterns | Supprimer de meteor-base |
-| **promise** polyfill | Natif depuis Node 4 | Supprimer |
-| **fetch** polyfill | Natif dans Node 18+ et Bun | Supprimer |
+| **Reify / modules-runtime** | Native ESM exists | ESM bundle |
+| **source-map-support** | Node/Bun handle it natively | Drop |
+| **es5-shim** | No 2026 browser needs it | Remove |
+| **SockJS** | Universal WebSocket | PR #14231 |
+| **accounts-ui** | Outdated Blaze templates | Remove from core |
+| **mobile-experience / launch-screen / crosswalk** | Cordova is obsolete | Remove |
+| **autopublish / insecure** | Antipatterns | Remove from meteor-base |
+| **promise** polyfill | Native since Node 4 | Remove |
+| **fetch** polyfill | Native in Node 18+ and Bun | Remove |
 
-### 🟡 À abstraire (interface pluggable)
+### Yellow — Abstract (pluggable interface)
 
-| Brique | Interface cible | Effort |
+| Component | Target interface | Effort |
 |---|---|---|
-| **Minimongo** | `ClientStore { apply*, find, insert... }` | 6-10 sem |
-| **mongo** (oplog/observe) | `ReactiveSource { watch, unwatch }` | 4-8 sem |
-| **EJSON** (sérialisation) | `Serializer { serialize, deserialize }` | ✅ PR #14235 |
-| **webapp** (HTTP) | `ServerHost { listen, handleRequest }` | 4-6 sem |
-| **Tracker** | Garder + adaptateur TC39 Signals | 2-4 sem |
-| **check** | Garder + intégration Zod | 1-2 sem |
+| **Minimongo** | `ClientStore { apply*, find, insert... }` | 6-10 weeks |
+| **mongo** (oplog/observe) | `ReactiveSource { watch, unwatch }` | 4-8 weeks |
+| **EJSON** (serialization) | `Serializer { serialize, deserialize }` | PR #14235 |
+| **webapp** (HTTP) | `ServerHost { listen, handleRequest }` | 4-6 weeks |
+| **Tracker** | Keep + TC39 Signals adapter | 2-4 weeks |
+| **check** | Keep + Zod integration | 1-2 weeks |
 
-### 🟢 À garder tel quel
+### Green — Keep as is
 
-DDP protocole, accounts-base/password/2fa, AsyncLocalStorage, reactive-var/dict, random, retry, ddp-rate-limiter, logging, ecmascript, typescript, hot-code-push, minifiers.
+DDP protocol, accounts-base/password/2fa, AsyncLocalStorage, reactive-var/dict, random, retry, ddp-rate-limiter, logging, ecmascript, typescript, hot-code-push, minifiers.
 
-### Les 3 couplages les plus problématiques
+### The 3 most problematic couplings
 
-**1. MongoDB — omniprésent :** mongo → minimongo → accounts → service-configuration → mongo-id → ejson → allow-deny → oplog. 6+ packages. Chantier 6+ mois.
+**1. MongoDB — pervasive:** mongo -> minimongo -> accounts -> service-configuration -> mongo-id -> ejson -> allow-deny -> oplog. 6+ packages. 6+ month effort.
 
-**2. Blaze — dans les UI packages :** accounts-ui, facts-ui, test-in-browser. Facile : supprimer du core.
+**2. Blaze — in UI packages:** accounts-ui, facts-ui, test-in-browser. Easy: remove from core.
 
-**3. Express — dans webapp :** webapp → Express 5.1.0 → accounts-oauth, force-ssl, browser-policy. L'interface `ServerHost` résout ça.
+**3. Express — in webapp:** webapp -> Express 5.1.0 -> accounts-oauth, force-ssl, browser-policy. The `ServerHost` interface solves this.
 
-### Résumé visuel
+### Visual summary
 
 ```
-Supprimer (dette pure) :
+Remove (pure debt):
   es5-shim, promise polyfill, fetch polyfill, autopublish, insecure,
   accounts-ui, mobile-experience, launch-screen, crosswalk
 
-Supprimer du chemin critique (garder en option) :
-  SockJS (défaut → ws), Reify (défaut → ESM), source-map-support, shell-server
+Remove from critical path (keep as option):
+  SockJS (default -> ws), Reify (default -> ESM), source-map-support, shell-server
 
-Abstraire (interface pluggable) :
-  Transport DDP    ✅ fait (#14231)
-  Serializer DDP   🔶 en cours (#14235)
-  Client store     ⬜ à faire (Minimongo → pluggable)
-  Observe driver   ⬜ à faire (oplog → change streams → pluggable)
-  Serveur HTTP     ⬜ à faire (Express → pluggable)
-  Réactivité       ⬜ à faire (Tracker + Signals adaptateur)
+Abstract (pluggable interface):
+  DDP Transport    done (#14231)
+  DDP Serializer   in progress (#14235)
+  Client store     to do (Minimongo -> pluggable)
+  Observe driver   to do (oplog -> change streams -> pluggable)
+  HTTP server      to do (Express -> pluggable)
+  Reactivity       to do (Tracker + Signals adapter)
 
-Garder tel quel :
+Keep as is:
   DDP, accounts-base/password/2fa, AsyncLocalStorage, reactive-var/dict,
   random, retry, logging, ecmascript, typescript, hot-code-push, minifiers
 ```
@@ -309,12 +309,12 @@ Garder tel quel :
 
 ## Conclusion
 
-> Le vrai chantier n'est pas "Meteor sur Bun". C'est "Meteor avec un format de bundle serveur standard, capable de tourner sur plusieurs runtimes modernes."
+> The real project isn't "Meteor on Bun." It's "Meteor with a standard server bundle format, capable of running on multiple modern runtimes."
 
-Un bundle ESM standard résout simultanément :
-- Portabilité runtime (Node/Bun/Deno)
-- Élimination du tribal knowledge
-- Base pour transport/serializer/store/observe pluggables
-- Convergence npm/Atmosphere
-- Intégration Webapp/Accounts via Web Standards
-- Fondations pour PWA/Capacitor/Electron
+A standard ESM bundle simultaneously solves:
+- Runtime portability (Node/Bun/Deno)
+- Elimination of tribal knowledge
+- Foundation for pluggable transport/serializer/store/observe
+- npm/Atmosphere convergence
+- Webapp/Accounts integration via Web Standards
+- Foundations for PWA/Capacitor/Electron

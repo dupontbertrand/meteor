@@ -1,199 +1,199 @@
 # Meteor Runtime Capability Model
 
-**Date :** 2026-03-30
-**Auteur :** dupontbertrand (with Claude analysis)
-**Status :** Architecture document
+**Date:** 2026-03-30
+**Author:** dupontbertrand (with Claude analysis)
+**Status:** Architecture document
 
 ---
 
-## Pourquoi ce document
+## Why this document
 
-La question "Meteor peut-il tourner sur Bun ?" est la mauvaise question. Elle part du principe que l'implémentation actuelle (vm.runInThisContext, Module.prototype patching, Reify, boot.js) EST Meteor. Ce ne sont que des choix d'implémentation de 2012, quand ESM n'existait pas et CJS était le seul système de modules.
+The question "Can Meteor run on Bun?" is the wrong question. It assumes that the current implementation (vm.runInThisContext, Module.prototype patching, Reify, boot.js) IS Meteor. These are merely implementation choices from 2012, when ESM didn't exist and CJS was the only module system.
 
-**La bonne question :** "De quelles capacités runtime Meteor a-t-il réellement besoin, et comment un runtime moderne pourrait-il les fournir ?"
+**The right question:** "What runtime capabilities does Meteor actually need, and how could a modern runtime provide them?"
 
 ---
 
 ## 1. Capability map
 
-| Capacité runtime | Pourquoi Meteor en a besoin | Implémentation Node actuelle | Bun-native alternative | Partagé ou runtime-spécifique ? |
+| Runtime capability | Why Meteor needs it | Current Node implementation | Bun-native alternative | Shared or runtime-specific? |
 |---|---|---|---|---|
-| **Point d'entrée serveur** | Démarrer le processus | `main.js` → `require('runtime.js')` → `require('boot.js')` | `index.mjs` avec imports ESM statiques | **Partagé** (ESM standard) |
-| **Chargement de modules en ordre** | Dépendances entre packages | boot.js lit program.json, boucle via `vm.runInThisContext` | Imports ESM statiques — le runtime résout l'ordre | **Partagé** |
-| **Isolation de packages + contexte** | Chaque package reçoit `Npm`, `Assets` | IIFE wrapping exécuté via vm | Modules ESM avec imports explicites | **Partagé** |
-| **Exports / live bindings** | Symboles partagés entre packages | Reify (module.link, module.export) polyfillant ESM sur CJS | **ESM natif** — live bindings gratuits | **Partagé** |
-| **Startup hooks** | Initialisation post-chargement | Tableau de callbacks, JS pur | Identique | **Partagé** |
-| **Accès npm** | Deps npm des packages Meteor | `Npm.require()` résolution custom multi-path | `import`/`require()` standard | **Partagé** |
-| **Assets** | Fichiers privés bundlés | `fs.readFileSync` via objet injecté | `fs.readFileSync` ou `Bun.file()` | **Abstraction optionnelle** |
-| **Serveur HTTP** | Servir assets + HTML + middlewares | `http.createServer()` + Express | `Bun.serve()` (2.5x plus rapide) ou `http.createServer` | **Abstraction nécessaire** |
-| **WebSocket / DDP** | Transport bidirectionnel temps réel | SockJS + permessage-deflate | WebSocket natif dans `Bun.serve()` (7x) | **Abstraction nécessaire** |
-| **Contexte async** | Binding d'environnement Meteor 3 | `AsyncLocalStorage` | Identique — plein support Bun | **Partagé** |
-| **Source maps** | Stack traces lisibles | `source-map-support` (monkey-patch) | Bun : natif. Node : `--enable-source-maps` | **Runtime-spécifique** (rien à faire) |
-| **Cycle de vie processus** | Signals, graceful shutdown | `process.on('SIGTERM')` | Identique + `Bun.serve().stop()` bonus | **Partagé** |
-| **Shell / REPL** | Debug interactif (optionnel) | `net.createServer` + `repl` | `bun --inspect` + `debug.bun.sh` | **Drop du chemin critique** |
+| **Server entrypoint** | Start the process | `main.js` -> `require('runtime.js')` -> `require('boot.js')` | `index.mjs` with static ESM imports | **Shared** (standard ESM) |
+| **Ordered module loading** | Dependencies between packages | boot.js reads program.json, loops via `vm.runInThisContext` | Static ESM imports — the runtime resolves the order | **Shared** |
+| **Package isolation + context** | Each package receives `Npm`, `Assets` | IIFE wrapping executed via vm | ESM modules with explicit imports | **Shared** |
+| **Exports / live bindings** | Shared symbols between packages | Reify (module.link, module.export) polyfilling ESM on CJS | **Native ESM** — free live bindings | **Shared** |
+| **Startup hooks** | Post-loading initialization | Array of callbacks, pure JS | Identical | **Shared** |
+| **npm access** | npm deps of Meteor packages | `Npm.require()` custom multi-path resolution | Standard `import`/`require()` | **Shared** |
+| **Assets** | Bundled private files | `fs.readFileSync` via injected object | `fs.readFileSync` or `Bun.file()` | **Optional abstraction** |
+| **HTTP server** | Serve assets + HTML + middlewares | `http.createServer()` + Express | `Bun.serve()` (2.5x faster) or `http.createServer` | **Abstraction needed** |
+| **WebSocket / DDP** | Bidirectional real-time transport | SockJS + permessage-deflate | Native WebSocket in `Bun.serve()` (7x) | **Abstraction needed** |
+| **Async context** | Meteor 3 environment binding | `AsyncLocalStorage` | Identical — full Bun support | **Shared** |
+| **Source maps** | Readable stack traces | `source-map-support` (monkey-patch) | Bun: native. Node: `--enable-source-maps` | **Runtime-specific** (nothing to do) |
+| **Process lifecycle** | Signals, graceful shutdown | `process.on('SIGTERM')` | Identical + `Bun.serve().stop()` bonus | **Shared** |
+| **Shell / REPL** | Interactive debug (optional) | `net.createServer` + `repl` | `bun --inspect` + `debug.bun.sh` | **Drop from critical path** |
 
-**Résultat :** Seuls 2 concerns justifient une abstraction : le **transport DDP** et le **serveur HTTP**. Tout le reste est du JS pur partagé ou géré identiquement par les deux runtimes.
+**Result:** Only 2 concerns justify an abstraction: the **DDP transport** and the **HTTP server**. Everything else is pure shared JS or handled identically by both runtimes.
 
 ---
 
-## 2. Exigence réelle vs bagage historique Node
+## 2. Actual requirement vs historical Node baggage
 
-| Élément | Exigence réelle ? | Implémentation Node historique | Verdict | Pourquoi |
+| Element | Actual requirement? | Historical Node implementation | Verdict | Why |
 |---|---|---|---|---|
-| Exécution de code dans une closure | **Oui** | vm.runInThisContext + IIFE wrapping | **Reimplement** | Module ESM = même isolation sans vm |
-| Module.prototype patching | **Non** | Monkey-patching _compile, _extensions | **Drop** | Hack pour Reify. ESM = plus besoin. |
-| Reify runtime | **Non** | Polyfill ES live bindings sur CJS | **Drop** | ESM natif = live bindings gratuits |
-| global.Package | **Partiel** | Objet global mutable | **Reimplement** | Imports ESM explicites + façade globale pour rétrocompat |
-| Npm.require() | **Non** | Résolution custom multi-path | **Drop** | import/require standard suffisent |
-| source-map-support | **Non** | Monkey-patch Error.prepareStackTrace | **Drop** | Node et Bun gèrent nativement |
-| program.json | **Partiel** | Manifest JSON parsé au runtime | **Reimplement** | L'ordre est dans les imports statiques |
-| main.js → runtime.js → boot.js | **Non** | 3 fichiers séparés | **Reimplement** | Un seul `index.mjs` |
-| shell-server | **Non** | net.createServer + repl | **Drop** du chemin critique | Package optionnel |
-| Semver version check | **Non** | boot.js vérifie la version Node | **Drop** | `engines` dans package.json suffit |
+| Code execution in a closure | **Yes** | vm.runInThisContext + IIFE wrapping | **Reimplement** | ESM module = same isolation without vm |
+| Module.prototype patching | **No** | Monkey-patching _compile, _extensions | **Drop** | Hack for Reify. ESM = no longer needed. |
+| Reify runtime | **No** | Polyfill for ES live bindings on CJS | **Drop** | Native ESM = free live bindings |
+| global.Package | **Partial** | Mutable global object | **Reimplement** | Explicit ESM imports + global facade for backward compat |
+| Npm.require() | **No** | Custom multi-path resolution | **Drop** | Standard import/require is sufficient |
+| source-map-support | **No** | Monkey-patch Error.prepareStackTrace | **Drop** | Node and Bun handle it natively |
+| program.json | **Partial** | JSON manifest parsed at runtime | **Reimplement** | The order is in the static imports |
+| main.js -> runtime.js -> boot.js | **No** | 3 separate files | **Reimplement** | A single `index.mjs` |
+| shell-server | **No** | net.createServer + repl | **Drop** from critical path | Optional package |
+| Semver version check | **No** | boot.js checks Node version | **Drop** | `engines` in package.json is sufficient |
 
 ---
 
-## 3. Ce qui ne doit PAS être porté littéralement depuis Node
+## 3. What must NOT be ported literally from Node
 
-| Mécanisme | Pourquoi le copier serait une erreur |
+| Mechanism | Why copying it would be a mistake |
 |---|---|
-| `vm.runInThisContext` pour charger les packages | C'est un module loader écrit à la main. `import` existe. |
-| `Module.prototype` patching | APIs internes non-documentées de Node. No-ops sur Bun. |
-| Reify runtime | Polyfill pour un problème résolu (ESM). |
-| `source-map-support` library | Les runtimes modernes gèrent ça nativement. |
-| `Npm.require()` résolution custom | Le runtime résout `node_modules` correctement. |
-| program.json + boucle de chargement | Si les imports sont statiques, le manifest est le code lui-même. |
-| Express middleware stack | Si on utilise `Bun.serve()`, Express n'est pas compatible. Handlers fetch = Web Standard. |
+| `vm.runInThisContext` to load packages | This is a hand-written module loader. `import` exists. |
+| `Module.prototype` patching | Undocumented Node internal APIs. No-ops on Bun. |
+| Reify runtime | Polyfill for a solved problem (ESM). |
+| `source-map-support` library | Modern runtimes handle this natively. |
+| `Npm.require()` custom resolution | The runtime resolves `node_modules` correctly. |
+| program.json + loading loop | If imports are static, the manifest is the code itself. |
+| Express middleware stack | If using `Bun.serve()`, Express is not compatible. Fetch handlers = Web Standard. |
 
 ---
 
 ## 4. Shared core vs runtime-specific
 
-| Concern | Logique Meteor partagée | Implémentation Node | Implémentation Bun | Abstraction ? |
+| Concern | Shared Meteor logic | Node implementation | Bun implementation | Abstraction? |
 |---|---|---|---|---|
-| **Protocole DDP** | Parsing/sérialisation, subscriptions, methods | Identique | Identique | **Non** — JS pur |
-| **Transport DDP** | — | SockJS + ws | WebSocket natif Bun.serve | **Oui** |
-| **Serveur HTTP** | Routing, assets, boilerplate HTML | http.createServer + Express | Bun.serve + fetch handler | **Oui** |
-| **MongoDB driver** | Queries, change streams | mongodb npm | mongodb npm (identique) | **Non** |
-| **Accounts / Auth** | Login, tokens, validation | bcrypt N-API | bcrypt N-API (devrait marcher) | **Non** |
-| **Startup hooks** | Callbacks | JS pur | JS pur | **Non** |
-| **AsyncLocalStorage** | Contexte async | async_hooks | async_hooks (identique) | **Non** |
-| **Source maps** | — | source-map-support | Natif Bun | **Non** (chaque runtime gère) |
-| **Module loading** | Ordre de dépendance | vm.runInThisContext loop | ESM import statique | **Non** — le format du bundle est le contrat |
-| **Assets** | API Assets.getText/getBinary | fs.readFileSync | fs.readFileSync ou Bun.file() | **Optionnel** |
-| **Process lifecycle** | Graceful shutdown | process.on('SIGTERM') | Identique + Bun.serve.stop() | **Non** |
+| **DDP protocol** | Parsing/serialization, subscriptions, methods | Identical | Identical | **No** — pure JS |
+| **DDP transport** | — | SockJS + ws | Native WebSocket Bun.serve | **Yes** |
+| **HTTP server** | Routing, assets, HTML boilerplate | http.createServer + Express | Bun.serve + fetch handler | **Yes** |
+| **MongoDB driver** | Queries, change streams | mongodb npm | mongodb npm (identical) | **No** |
+| **Accounts / Auth** | Login, tokens, validation | bcrypt N-API | bcrypt N-API (should work) | **No** |
+| **Startup hooks** | Callbacks | Pure JS | Pure JS | **No** |
+| **AsyncLocalStorage** | Async context | async_hooks | async_hooks (identical) | **No** |
+| **Source maps** | — | source-map-support | Native Bun | **No** (each runtime handles it) |
+| **Module loading** | Dependency order | vm.runInThisContext loop | Static ESM import | **No** — the bundle format is the contract |
+| **Assets** | Assets.getText/getBinary API | fs.readFileSync | fs.readFileSync or Bun.file() | **Optional** |
+| **Process lifecycle** | Graceful shutdown | process.on('SIGTERM') | Identical + Bun.serve.stop() | **No** |
 
 ---
 
-## 5. Les 5 interfaces pluggables
+## 5. The 5 pluggable interfaces
 
-Le même pattern architectural se répète : **abstraire le contrat, garder l'implémentation par défaut, permettre le swap.**
+The same architectural pattern repeats: **abstract the contract, keep the default implementation, allow swapping.**
 
-### 5.1 Transport DDP ✅ (PR #14231 — merged)
+### 5.1 DDP Transport (PR #14231 — merged)
 
 ```js
 { name: string, setup(httpServer, pathPrefix, options) => EventEmitter }
 ```
 
-Implémentations : SockJS (défaut), faye, ws, uWebSockets.js.
-Config : `DDP_TRANSPORT=ws` ou `settings.json`.
-Benchmarks : uws 14,300 calls/sec vs sockjs 8,156 (+75%).
+Implementations: SockJS (default), faye, ws, uWebSockets.js.
+Config: `DDP_TRANSPORT=ws` or `settings.json`.
+Benchmarks: uws 14,300 calls/sec vs sockjs 8,156 (+75%).
 
-### 5.2 Serializer DDP 🔶 (PR #14235 — open)
+### 5.2 DDP Serializer (PR #14235 — open)
 
 ```js
 { name: string, wireFormat: 'text'|'binary', serialize(wireMsg), deserialize(raw) }
 ```
 
-Architecture 3 couches : `toWireMessage()` → `serialize()` → `transport.send()`.
-Implémentations : EJSON (défaut), CBOR (expérimental).
-Benchmarks : CBOR +38% throughput 1KB, -23% wire size, 2-3x serialize.
+3-layer architecture: `toWireMessage()` -> `serialize()` -> `transport.send()`.
+Implementations: EJSON (default), CBOR (experimental).
+Benchmarks: CBOR +38% throughput 1KB, -23% wire size, 2-3x serialize.
 
-### 5.3 Client Store (Minimongo → pluggable) — à faire
+### 5.3 Client Store (Minimongo -> pluggable) — to do
 
 ```js
 interface ClientStore {
   applyAdded(collection, id, fields);
   applyChanged(collection, id, fields, cleared);
   applyRemoved(collection, id);
-  find(collection, selector, options) → ReactiveCursor;
-  findOne(collection, selector, options) → ReactiveValue;
-  insert(collection, doc) → id;
-  update(collection, selector, modifier) → count;
-  remove(collection, selector) → count;
+  find(collection, selector, options) -> ReactiveCursor;
+  findOne(collection, selector, options) -> ReactiveValue;
+  insert(collection, doc) -> id;
+  update(collection, selector, modifier) -> count;
+  remove(collection, selector) -> count;
   clear(collection);
   snapshot(collection);
   restore(collection, snapshot);
 }
 ```
 
-Implémentations possibles : Minimongo (défaut), TinyBase, RxDB, PowerSync.
+Possible implementations: Minimongo (default), TinyBase, RxDB, PowerSync.
 
-### 5.4 Observe Driver (oplog → change streams → pluggable) — à faire
+### 5.4 Observe Driver (oplog -> change streams -> pluggable) — to do
 
 ```js
 interface ReactiveSource {
-  watch(collection, query, callbacks) → handle;
-  unwatch(handle) → void;
+  watch(collection, query, callbacks) -> handle;
+  unwatch(handle) -> void;
 }
 ```
 
-Implémentations : oplog tailing (legacy), change streams (modern), polling (fallback).
-Config : `METEOR_OBSERVE_STRATEGY=change-stream`.
+Implementations: oplog tailing (legacy), change streams (modern), polling (fallback).
+Config: `METEOR_OBSERVE_STRATEGY=change-stream`.
 
-### 5.5 HTTP Host (Express → pluggable) — à faire
+### 5.5 HTTP Host (Express -> pluggable) — to do
 
 ```js
 interface ServerHost {
   listen(port, callback);
-  handleRequest(req) → Response;
+  handleRequest(req) -> Response;
   stop(graceful: boolean);
 }
 ```
 
-Implémentations : http.createServer + Express (Node), Bun.serve (Bun).
+Implementations: http.createServer + Express (Node), Bun.serve (Bun).
 
 ---
 
-## 6. Coût de réimplémentation vs émulation
+## 6. Cost of reimplementation vs emulation
 
-### Stratégie A — Émuler les internals Node
+### Strategy A — Emulate Node internals
 
-| Dimension | Évaluation |
+| Dimension | Assessment |
 |---|---|
-| Effort court terme | Faible — guards dans 4 fichiers, env vars, try/catch |
-| Maintenance long terme | **Élevée** — chaque update Bun peut casser les shims |
-| Dette technique | **Héritée + nouvelle** — on garde vm/Reify/Module patching ET on ajoute des shims |
-| Potentiel performance | **Limité** — Bun comme Node plus rapide, pas comme Bun |
-| Complexité contributeur | **Haute** — internals Node + shims + Bun |
-| Risque migration | Faible mais résultat fragile |
+| Short-term effort | Low — guards in 4 files, env vars, try/catch |
+| Long-term maintenance | **High** — each Bun update can break the shims |
+| Technical debt | **Inherited + new** — we keep vm/Reify/Module patching AND add shims |
+| Performance potential | **Limited** — Bun as a faster Node, not as Bun |
+| Contributor complexity | **High** — Node internals + shims + Bun |
+| Migration risk | Low but fragile result |
 
-### Stratégie B — Réimplémenter via standards (ESM)
+### Strategy B — Reimplement via standards (ESM)
 
-| Dimension | Évaluation |
+| Dimension | Assessment |
 |---|---|
-| Effort court terme | **Plus élevé** — modifier le bundler pour émettre ESM |
-| Maintenance long terme | **Faible** — ESM est standard, pas de shims |
-| Dette technique | **Réduite** — vm, Reify, Module patching, source-map-support, npm-require.js, program.json disparaissent |
-| Potentiel performance | **Maximum** — Bun.serve (2.5x), WebSocket natif (7x), cold start rapide |
-| Complexité contributeur | **Plus faible** — ESM est standard, documenté |
-| Risque migration | Moyen — nouveau format de bundle, coexistence 2-3 versions |
+| Short-term effort | **Higher** — modify the bundler to emit ESM |
+| Long-term maintenance | **Low** — ESM is standard, no shims |
+| Technical debt | **Reduced** — vm, Reify, Module patching, source-map-support, npm-require.js, program.json all go away |
+| Performance potential | **Maximum** — Bun.serve (2.5x), native WebSocket (7x), fast cold start |
+| Contributor complexity | **Lower** — ESM is standard, well documented |
+| Migration risk | Medium — new bundle format, coexistence across 2-3 versions |
 
 ### Verdict
 
-La stratégie A est un piège attractif. La stratégie B est plus rentable dès que le travail sur le bundler est amorti. Si Meteor veut supporter Bun (ou Deno, ou tout futur runtime) sérieusement, c'est le seul chemin viable.
+Strategy A is an attractive trap. Strategy B is more cost-effective as soon as the bundler work is amortized. If Meteor wants to support Bun (or Deno, or any future runtime) seriously, this is the only viable path.
 
 ---
 
-## 7. Recommandation
+## 7. Recommendation
 
-**Réimplémentation via standards.** Le bundle ESM est le levier central. Il bénéficie à Meteor sur Node aussi (plus propre, plus rapide, moins de dette).
+**Reimplementation via standards.** The ESM bundle is the central lever. It benefits Meteor on Node as well (cleaner, faster, less debt).
 
-**Séquence :**
-1. **Spike bundler ESM** (Doc 1) — valider la faisabilité
-2. **Transport + Serializer** — déjà en cours (PRs #14231, #14235)
-3. **Client Store abstrait** — extraire l'interface de Minimongo
-4. **Observe Driver abstrait** — change streams comme défaut
-5. **HTTP Host abstrait** — uniquement si/quand Bun.serve apporte un gain mesurable
+**Sequence:**
+1. **ESM bundler spike** (Doc 1) — validate feasibility
+2. **Transport + Serializer** — already in progress (PRs #14231, #14235)
+3. **Abstract Client Store** — extract the interface from Minimongo
+4. **Abstract Observe Driver** — change streams as default
+5. **Abstract HTTP Host** — only if/when Bun.serve delivers measurable gains
 
-Chaque étape a de la valeur indépendamment des suivantes.
+Each step has value independently of the subsequent ones.
