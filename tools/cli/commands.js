@@ -1318,7 +1318,8 @@ var buildCommands = {
     headless: { type: Boolean },
     verbose: { type: Boolean, short: "v" },
     'allow-incompatible-update': { type: Boolean },
-    platforms: { type: String }
+    platforms: { type: String },
+    format: { type: String },
   },
   catalogRefresh: new catalog.Refresh.Never()
 };
@@ -1518,6 +1519,7 @@ ${Console.command("meteor build ../output")}`,
       serverArch: bundleArch,
       buildMode: options.debug ? 'development' : 'production',
       webArchs,
+      format: options.format || undefined,
     },
   });
   if (bundleResult.errors) {
