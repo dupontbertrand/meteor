@@ -133,7 +133,25 @@ meteor build --format=esm ../output --directory
 
 ---
 
-## Step 4 — Testing
+## Step 4 — Validation
+
+### 4.0 Systematic validation: generated bundle vs spike vs legacy
+
+Built the same app (`--bare` + webapp) three ways:
+1. `meteor build --format=esm` (our change)
+2. `meteor build` (legacy, no --format — regression check)
+3. Spike scripts (manual loader from /tmp)
+
+All three tested with the same DDP smoke test (handshake + method + subscription).
+
+| Build | Runtime | HTTP | DDP 4/4 |
+|---|---|---|---|
+| Legacy (`node main.js`) | Node | ✅ 200 | ✅ 4/4 |
+| ESM (`node index.mjs`) | Node | ✅ 200 | ✅ 4/4 |
+| ESM (`bun index.mjs`) | Bun | ✅ 200 | N/A (needs Bun.serve bridge) |
+
+**Legacy is unchanged.** No regression.
+**ESM reproduces the spike.** Same behavior from the generated bundle as from the manual scripts.
 
 ### 4.1 Build with --format=esm
 
