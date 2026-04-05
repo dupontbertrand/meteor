@@ -281,8 +281,23 @@ Object.assign(AppProcess.prototype, {
     });
 
     // Add a child.sendMessage(topic, payload) method to this child
-    // process object. IPC is not available with Bun.
-    if (!isBun) {
+    // process object.
+    if (isBun) {
+      // Bun does not support Node's IPC channel. Emulate IPC over
+      // stdin JSON lines so hot reload messages reach the child.
+      child.sendMessage = function (topic, payload) {
+        return new Promise(function (resolve, reject) {
+          var msg = JSON.stringify({ topic: topic, payload: payload }) + '\n';
+          child.stdin.write(msg, function (err) {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+      };
+      // child→parent messages (shell-server .reload) not supported
+      // on Bun — the shell-server package falls back to process.exit(0).
+      child.onMessage = function () {};
+    } else {
       const interProcessMessaging = await loadIsopackage("inter-process-messaging");
       interProcessMessaging.enable(child);
     }
