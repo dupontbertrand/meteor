@@ -114,8 +114,9 @@ async function runTestWorkers(options) {
         try { proc.proc && proc.proc.kill('SIGKILL'); } catch (err) { /* already gone */ }
       }, WORKER_TIMEOUT_MS);
       timer.unref();
-      proc.start().catch(() => {
+      proc.start().catch((err) => {
         // Pre-spawn failure (post-spawn errors already flow through onExit).
+        runLog.log(`[w${i}] failed to start: ${err.message}`, { arrow: false });
         worker.code = worker.code === null ? 1 : worker.code;
         resolve();
       });

@@ -68,6 +68,13 @@ describe('shard filter', () => {
     expect(r.result.tests).toBe(1);
   });
 
+  test('malformed TEST_METADATA falls back to unsharded', () => {
+    const r = runFixture('single-test.cjs', { TEST_METADATA: '{not-json' });
+    expect(r.status).toBe(0);
+    expect(r.result).toMatchObject({ tests: 1, passed: 1 });
+    expect(r.result.shard).toBeUndefined();
+  });
+
   test('skip/todo/only work under sharding (wrapped properties)', () => {
     // skip-todo.cjs has 4 top-level units: t0, s0 (skip), td0 (todo), t1
     const w0 = runFixture('skip-todo.cjs', shardEnv(0, 2)); // t0 + td0

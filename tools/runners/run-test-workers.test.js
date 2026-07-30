@@ -47,3 +47,48 @@ describe('workerMongoUrl', () => {
     expect(() => workerMongoUrl('no-mongo-server', 0)).toThrow(/parallel workers/);
   });
 });
+
+describe('runTestWorkers (mocked workers)', () => {
+  // AppProcess mock: "spawns" a worker that immediately emits its result line
+  // through onOutput and exits via onExit — no real meteor involved.
+  let spawnedOptions;
+  let loadIsopackageCalls;
+
+  beforeEach(() => {
+    jest.resetModules();
+    spawnedOptions = [];
+    loadIsopackageCalls = 0;
+    jest.doMock('./run-app.js', () => ({
+      AppProcess: class {
+        constructor(options) { this.options = options; spawnedOptions.push(options); }
+        async start() {
+          const i = this.options.testMetadata.shard.index;
+          await this.options.onOutput(
+            `TEST_IN_NODE_RESULT {"tests":2,"passed":${i === 0 ? 2 : 1},"failed":${i === 0 ? 0 : 1},"skipped":0,"todo":0}`,
+            false,
+          );
+          this.options.onExit(i === 0 ? 0 : 1, null);
+        }
+      },
+    }));
+    jest.doMock('./run-log.js', () => ({ log: jest.fn(), logAppOutput: jest.fn() }));
+    jest.doMock('../tool-env/isopackets.js', () => ({
+      loadIsopackage: jest.fn(() => { loadIsopackageCalls++; throw new Error('should not be called for no-mongo'); }),
+    }));
+  });
+
+  test('no-mongo sentinel skips db work and aggregates a failing worker to exit 1', async () => {
+    const { runTestWorkers } = require('./run-test-workers.js');
+    const { exitCode, workers } = await runTestWorkers({
+      projectContext: {}, bundlePath: '/x', mongoUrl: 'no-mongo-server',
+      rootUrl: 'http://localhost/', listenHost: undefined, settings: null,
+      testMetadata: { driverPackage: 'test-in-node' }, nodeOptions: [], workerCount: 2,
+    });
+    expect(exitCode).toBe(1);                       // one worker failed
+    expect(loadIsopackageCalls).toBe(0);            // dropWorkerDatabases skipped
+    expect(spawnedOptions[0].mongoUrl).toBe('no-mongo-server'); // sentinel passed through
+    expect(spawnedOptions[1].testMetadata.shard).toEqual({ index: 1, total: 2 });
+    expect(workers[0].result.passed).toBe(2);
+    expect(workers[1].code).toBe(1);
+  });
+});
