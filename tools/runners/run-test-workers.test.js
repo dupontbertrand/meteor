@@ -49,26 +49,31 @@ describe('workerMongoUrl', () => {
 });
 
 describe('runTestWorkers (mocked workers)', () => {
-  // AppProcess mock: "spawns" a worker that immediately emits its result line
-  // through onOutput and exits via onExit — no real meteor involved.
+  // AppProcess mock: behavior-parameterized via `mockBehavior`, so individual
+  // tests can simulate a worker that never exits, never spawns, etc. The
+  // default (set fresh each beforeEach) reproduces the original inline mock:
+  // "spawns" a worker that immediately emits its result line through
+  // onOutput and exits via onExit — no real meteor involved.
   let spawnedOptions;
   let loadIsopackageCalls;
+  let mockBehavior;
 
   beforeEach(() => {
     jest.resetModules();
     spawnedOptions = [];
     loadIsopackageCalls = 0;
+    mockBehavior = async (options) => {
+      const i = options.testMetadata.shard.index;
+      await options.onOutput(
+        `TEST_IN_NODE_RESULT {"tests":2,"passed":${i === 0 ? 2 : 1},"failed":${i === 0 ? 0 : 1},"skipped":0,"todo":0}`,
+        false,
+      );
+      options.onExit(i === 0 ? 0 : 1, null);
+    };
     jest.doMock('./run-app.js', () => ({
       AppProcess: class {
         constructor(options) { this.options = options; spawnedOptions.push(options); }
-        async start() {
-          const i = this.options.testMetadata.shard.index;
-          await this.options.onOutput(
-            `TEST_IN_NODE_RESULT {"tests":2,"passed":${i === 0 ? 2 : 1},"failed":${i === 0 ? 0 : 1},"skipped":0,"todo":0}`,
-            false,
-          );
-          this.options.onExit(i === 0 ? 0 : 1, null);
-        }
+        async start() { return mockBehavior(this.options); }
       },
     }));
     jest.doMock('./run-log.js', () => ({ log: jest.fn(), logAppOutput: jest.fn() }));
@@ -91,4 +96,43 @@ describe('runTestWorkers (mocked workers)', () => {
     expect(workers[0].result.passed).toBe(2);
     expect(workers[1].code).toBe(1);
   });
+
+  test('a worker that never exits is timed out to 255', async () => {
+    process.env.METEOR_TEST_WORKER_TIMEOUT_SECS = '0.05'; // 50ms, module reloaded per resetModules
+    mockBehavior = async () => { /* spawn "succeeds" but nothing ever happens: no result, no onExit */ };
+    const { runTestWorkers } = require('./run-test-workers.js');
+    const { exitCode, workers } = await runTestWorkers({
+      projectContext: {}, bundlePath: '/x', mongoUrl: 'no-mongo-server',
+      rootUrl: 'http://localhost/', listenHost: undefined, settings: null,
+      testMetadata: {}, nodeOptions: [], workerCount: 1,
+    });
+    expect(exitCode).toBe(255);
+    expect(workers[0].signal).toBe('TIMEOUT');
+    delete process.env.METEOR_TEST_WORKER_TIMEOUT_SECS;
+  });
+
+  test('a worker that exits 0 without a result line yields exit 1', async () => {
+    mockBehavior = async (options) => { options.onExit(0, null); };
+    const { runTestWorkers } = require('./run-test-workers.js');
+    const { exitCode, workers } = await runTestWorkers({
+      projectContext: {}, bundlePath: '/x', mongoUrl: 'no-mongo-server',
+      rootUrl: 'http://localhost/', listenHost: undefined, settings: null,
+      testMetadata: {}, nodeOptions: [], workerCount: 1,
+    });
+    expect(exitCode).toBe(1);
+    expect(workers[0].result).toBeNull();
+  });
+
+  test('a start() that hangs forever is still resolved by the timeout', async () => {
+    process.env.METEOR_TEST_WORKER_TIMEOUT_SECS = '0.05';
+    mockBehavior = () => new Promise(() => {}); // start() never settles, proc.proc never exists
+    const { runTestWorkers } = require('./run-test-workers.js');
+    const { exitCode } = await runTestWorkers({
+      projectContext: {}, bundlePath: '/x', mongoUrl: 'no-mongo-server',
+      rootUrl: 'http://localhost/', listenHost: undefined, settings: null,
+      testMetadata: {}, nodeOptions: [], workerCount: 1,
+    });
+    expect(exitCode).toBe(255);
+    delete process.env.METEOR_TEST_WORKER_TIMEOUT_SECS;
+  }, 10000);
 });

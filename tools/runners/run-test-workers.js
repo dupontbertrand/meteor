@@ -14,6 +14,7 @@ const { loadIsopackage } = require('../tool-env/isopackets.js');
 const RESULT_PREFIX = 'TEST_IN_NODE_RESULT ';
 const WORKER_TIMEOUT_MS =
   (+process.env.METEOR_TEST_WORKER_TIMEOUT_SECS || 900) * 1000;
+const KILL_GRACE_MS = Math.min(5000, WORKER_TIMEOUT_MS);
 
 function parseMongoUrl(url) {
   const m = /^(mongodb(?:\+srv)?:\/\/[^/]+)(?:\/([^?]*))?(\?.*)?$/.exec(url || '');
@@ -112,6 +113,11 @@ async function runTestWorkers(options) {
       timer = setTimeout(() => {
         worker.signal = worker.signal || 'TIMEOUT';
         try { proc.proc && proc.proc.kill('SIGKILL'); } catch (err) { /* already gone */ }
+        // If the child never spawned (start() wedged pre-spawn) or the kill
+        // cannot be delivered, onExit never fires — resolve after a short
+        // grace so the backstop itself can never hang the run.
+        const grace = setTimeout(resolve, KILL_GRACE_MS);
+        grace.unref();
       }, WORKER_TIMEOUT_MS);
       timer.unref();
       proc.start().catch((err) => {
