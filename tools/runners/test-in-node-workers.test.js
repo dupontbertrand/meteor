@@ -102,3 +102,31 @@ describe('shard filter', () => {
     expect(r.result).toMatchObject({ tests: 5, passed: 5 });
   });
 });
+
+describe('name filter', () => {
+  test('TINYTEST_FILTER keeps only matching top-level units', () => {
+    const r = runFixture('keepalive-tests.cjs', { TINYTEST_FILTER: 't[01]' });
+    expect(r.status).toBe(0);
+    expect(r.result).toMatchObject({ tests: 2, passed: 2 }); // t0, t1 ; suite-a and t2 excluded
+  });
+
+  test('filter drops a whole non-matching suite with its nested tests', () => {
+    const r = runFixture('keepalive-tests.cjs', { TINYTEST_FILTER: 'suite-a' });
+    expect(r.result).toMatchObject({ tests: 2, passed: 2 }); // nested-1 + nested-2
+  });
+
+  test('filter composes with sharding (round-robin over KEPT units only)', () => {
+    const env = { TINYTEST_FILTER: '^t' }; // t0, t1, t2 (3 units)
+    const w0 = runFixture('keepalive-tests.cjs', { ...env, ...shardEnv(0, 2) }); // t0, t2
+    const w1 = runFixture('keepalive-tests.cjs', { ...env, ...shardEnv(1, 2) }); // t1
+    expect(w0.result.tests + w1.result.tests).toBe(3);
+    expect(w0.result).toMatchObject({ tests: 2 });
+    expect(w1.result).toMatchObject({ tests: 1 });
+  });
+
+  test('an invalid regex falls back to literal substring matching', () => {
+    const r = runFixture('keepalive-tests.cjs', { TINYTEST_FILTER: '(' });
+    expect(r.status).toBe(0); // does not crash; '(' matches nothing → sentinel → 0 tests
+    expect(r.result).toMatchObject({ tests: 0 });
+  });
+});

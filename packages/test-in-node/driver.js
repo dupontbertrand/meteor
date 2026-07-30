@@ -34,7 +34,7 @@ state.rootAfterReached = state.rootAfterReached || false;
 state.finalized = state.finalized || false;
 state.pendingEvents = state.pendingEvents || [];
 
-// ---- Shard filter (Stage 1, parallel workers) -------------------------------
+// ---- Registration filter: shard + name (Stage 1, parallel workers) ---------
 // The orchestrator assigns this worker a shard {index, total} via TEST_METADATA.
 // node:test's own --test-shard shards by *discovered file* and is silently
 // ignored here (isobuild pre-loads every test file into the bundle; node:test
@@ -49,14 +49,30 @@ try {
   if (meta.shard && meta.shard.total > 1 && meta.shard.index >= 0 && meta.shard.index < meta.shard.total) shard = meta.shard;
 } catch (err) { /* no/invalid TEST_METADATA (pure Node) — run unsharded */ }
 
-if (shard) {
-  state.shard = { index: shard.index, total: shard.total };
+// --filter / -f: the tool exports it as TINYTEST_FILTER (same plumbing as
+// tinytest). Applied at registration time, at the same top-level-unit
+// granularity as sharding: a non-matching top-level unit is dropped wholesale.
+// Regex when the pattern compiles, literal substring otherwise. Unnamed
+// units (rare) are kept — a grep cannot judge them.
+let nameFilter = null;
+if (process.env.TINYTEST_FILTER) {
+  const pattern = process.env.TINYTEST_FILTER;
+  try { const re = new RegExp(pattern); nameFilter = (name) => re.test(name); }
+  catch (err) { nameFilter = (name) => name.includes(pattern); }
+}
+
+if (shard || nameFilter) {
+  if (shard) state.shard = { index: shard.index, total: shard.total };
   const nt = require('node:test');
   let topLevelSeen = 0;
   let depth = 0;
   const wrap = (orig, isSuiteFn) => {
     const wrapped = function (...args) {
-      if (depth === 0 && (topLevelSeen++ % shard.total) !== shard.index) return;
+      if (depth === 0) {
+        const name = typeof args[0] === 'string' ? args[0] : '';
+        if (nameFilter && name && !nameFilter(name)) return;      // filtered out
+        if (shard && (topLevelSeen++ % shard.total) !== shard.index) return;
+      }
       if (!isSuiteFn) return orig.apply(this, args);
       // describe/suite bodies run synchronously at registration: raise depth so
       // nested registrations are not re-filtered (the unit is the whole suite).

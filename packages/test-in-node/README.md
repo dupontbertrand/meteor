@@ -42,6 +42,17 @@ Standard `node:test`: `describe`/`it`, `node:assert/strict`, async tests, `it.sk
 `it.todo`, nested suites — all from Node core, zero extra dependencies. The runner
 reports a compact pass/fail/skip/todo summary and exits non-zero if any test fails.
 
+## Filtering tests (`--filter` / `-f`)
+
+    meteor test-packages my-package --driver-package test-in-node --once --filter 'my-package'
+
+`--filter <pattern>` (`-f`) works with this driver, at the same **top-level**
+`test()`/`describe()` granularity as sharding: a non-matching top-level unit
+(and everything nested inside it) is dropped wholesale at registration time.
+`<pattern>` is used as a regular expression when it compiles, and falls back
+to a literal substring match otherwise. It composes with `--parallel-workers`:
+the round-robin shard assignment runs over the already-filtered set of units.
+
 ## Parallel workers (experimental)
 
 Build once, run the suite across N isolated worker processes — each with its
