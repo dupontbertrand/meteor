@@ -2209,6 +2209,11 @@ testCommandOptions = {
     // Undocumented flag to use a different test driver.
     'driver-package': { type: String },
 
+    // Undocumented, experimental (Stage 1 of the test-runner platform,
+    // discussion #12162): run N parallel workers from one build. Requires
+    // --driver-package test-in-node and --once.
+    'parallel-workers': { type: Number },
+
     // Sets the path of where the temp app should be created
     'test-app-path': { type: String },
 
@@ -2528,6 +2533,25 @@ async function doTestCommand(options) {
 
   options.cordovaRunner = cordovaRunner;
 
+  if (options['parallel-workers'] !== undefined) {
+    if (!(options['parallel-workers'] >= 2)) {
+      Console.error("--parallel-workers requires a value >= 2.");
+      return 1;
+    }
+    if (!options.once) {
+      Console.error("--parallel-workers requires --once (no watch/rebuild while workers run).");
+      return 1;
+    }
+    if (global.testCommandMetadata.driverPackage !== 'test-in-node') {
+      Console.error("--parallel-workers is only supported with --driver-package test-in-node.");
+      return 1;
+    }
+    if (options.inspect || options['inspect-brk'] || options['debug-port']) {
+      Console.error("--parallel-workers cannot be combined with the inspector.");
+      return 1;
+    }
+  }
+
   // test-in-node attaches its own node:test reporter at process start (see
   // tools/runners/run-app.js). A user --test-reporter in SERVER_NODE_OPTIONS
   // would make Node see two reporters (aborting at startup when reporter and
@@ -2648,6 +2672,7 @@ var runTestAppForPackages = async function (projectContext, options) {
       disableOplog: options['disable-oplog'],
       settingsFile: options.settings,
       testMetadata: global.testCommandMetadata,
+      parallelWorkers: options['parallel-workers'],
       banner: options['show-test-app-path'] ? null : "Tests",
       buildOptions: buildOptions,
       rootUrl: process.env.ROOT_URL,

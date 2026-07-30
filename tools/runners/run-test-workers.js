@@ -52,12 +52,20 @@ async function runTestWorkers(options) {
     settings, testMetadata, nodeOptions, workerCount,
   } = options;
 
-  try {
-    await dropWorkerDatabases(mongoUrl, workerCount);
-  } catch (err) {
-    runLog.log(
-      `test-in-node: could not drop worker databases (${err.message}) — continuing; stale data may leak between runs.`
-    );
+  // Packages that don't depend on `mongo-dev-server` never get a real Mongo
+  // (run-all.js sets the 'no-mongo-server' sentinel instead of starting one).
+  // There's nothing to shard or drop in that case — pass the sentinel through
+  // to every worker unchanged, mirroring the single-process path.
+  const hasMongo = !!mongoUrl && mongoUrl !== 'no-mongo-server';
+
+  if (hasMongo) {
+    try {
+      await dropWorkerDatabases(mongoUrl, workerCount);
+    } catch (err) {
+      runLog.log(
+        `test-in-node: could not drop worker databases (${err.message}) — continuing; stale data may leak between runs.`
+      );
+    }
   }
 
   // Deterministic ports: one random base, then +i — N independent random draws
@@ -78,7 +86,7 @@ async function runTestWorkers(options) {
         port: basePort + i,
         listenHost,
         rootUrl,
-        mongoUrl: workerMongoUrl(mongoUrl, i),
+        mongoUrl: hasMongo ? workerMongoUrl(mongoUrl, i) : mongoUrl,
         oplogUrl: null, // no per-worker oplog tailing; reactivity probes the server
         settings,
         nodeOptions,

@@ -460,6 +460,7 @@ var AppRunner = function (options) {
   self.inspect = options.inspect;
   self.proxy = options.proxy;
   self.autoRestart = !options.once;
+  self.parallelWorkers = options.parallelWorkers;
   self.watchForChanges =
     options.watchForChanges === undefined ? true : options.watchForChanges;
   self.onRunEnd = options.onRunEnd;
@@ -814,6 +815,31 @@ Object.assign(AppRunner.prototype, {
 
     // Run the program
     options.beforeRun && await options.beforeRun();
+
+    if (self.parallelWorkers >= 2) {
+      // Parallel test mode (Stage 1, #12162): the bundle above is built once;
+      // spawn N sharded workers from it instead of the single app process, and
+      // feed the aggregate exit code through the normal once-mode plumbing.
+      const { runTestWorkers } = require('./run-test-workers.js');
+      const { exitCode } = await runTestWorkers({
+        projectContext: self.projectContext,
+        bundlePath,
+        mongoUrl: self.mongoUrl,
+        rootUrl: self.rootUrl,
+        listenHost: self.listenHost,
+        settings,
+        testMetadata: self.testMetadata,
+        nodeOptions: getNodeOptionsFromEnvironment(),
+        workerCount: self.parallelWorkers,
+      });
+      return {
+        outcome: 'terminated',
+        code: exitCode,
+        signal: undefined,
+        watchSet: combinedWatchSetForBundleResult(bundleResult),
+      };
+    }
+
     var appProcess = new AppProcess({
       projectContext: self.projectContext,
       bundlePath: bundlePath,
