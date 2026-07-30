@@ -78,10 +78,11 @@ async function runTestWorkers(options) {
   const workers = [];
   const runs = [];
   for (let i = 0; i < workerCount; i++) {
-    const worker = { index: i, code: null, signal: null, result: null };
+    const worker = { index: i, code: null, signal: null, result: null, durationMs: null };
     workers.push(worker);
     runs.push(new Promise((resolve) => {
       let timer;
+      const startedAt = Date.now();
       const proc = new AppProcess({
         projectContext,
         bundlePath,
@@ -105,6 +106,7 @@ async function runTestWorkers(options) {
         onListen: () => {},
         onExit: (code, signal) => {
           clearTimeout(timer);
+          worker.durationMs = Date.now() - startedAt;
           worker.code = code;
           worker.signal = signal || null;
           resolve();
@@ -116,7 +118,10 @@ async function runTestWorkers(options) {
         // If the child never spawned (start() wedged pre-spawn) or the kill
         // cannot be delivered, onExit never fires — resolve after a short
         // grace so the backstop itself can never hang the run.
-        const grace = setTimeout(resolve, KILL_GRACE_MS);
+        const grace = setTimeout(() => {
+          if (worker.durationMs == null) worker.durationMs = Date.now() - startedAt;
+          resolve();
+        }, KILL_GRACE_MS);
         grace.unref();
       }, WORKER_TIMEOUT_MS);
       timer.unref();
@@ -124,6 +129,7 @@ async function runTestWorkers(options) {
         // Pre-spawn failure (post-spawn errors already flow through onExit).
         runLog.log(`[w${i}] failed to start: ${err.message}`, { arrow: false });
         worker.code = worker.code === null ? 1 : worker.code;
+        if (worker.durationMs == null) worker.durationMs = Date.now() - startedAt;
         resolve();
       });
     }));
@@ -145,7 +151,8 @@ async function runTestWorkers(options) {
       (w.result
         ? `${w.result.passed} passed${w.result.failed ? `, ${w.result.failed} failed` : ''} (${w.result.tests} tests)`
         : 'no result') +
-      `  exit ${w.signal ? w.signal : w.code}`,
+      `  exit ${w.signal ? w.signal : w.code}` +
+      (w.durationMs != null ? ` [${(w.durationMs / 1000).toFixed(1)}s]` : ''),
       { arrow: false },
     );
   }

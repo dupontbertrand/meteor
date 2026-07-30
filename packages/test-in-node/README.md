@@ -63,7 +63,7 @@ own port and its own Mongo database (`meteor_w<i>` on the shared dev mongod):
 
     meteor test-packages my-package --driver-package test-in-node --once --parallel-workers 4
 
-`--parallel-workers` takes a number >= 2 or `auto` (machine parallelism, default 2 if single CPU).
+`--parallel-workers` takes a number >= 2 or `auto` (machine parallelism, floored at 2).
 
 - Sharding is assigned round-robin over **top-level** `test()`/`describe()`
   registrations (a top-level `describe` moves wholesale with its nested tests).
