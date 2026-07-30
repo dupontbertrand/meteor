@@ -67,4 +67,31 @@ describe('shard filter', () => {
     expect(r.result.shard).toBeUndefined();
     expect(r.result.tests).toBe(1);
   });
+
+  test('skip/todo/only work under sharding (wrapped properties)', () => {
+    // skip-todo.cjs has 4 top-level units: t0, s0 (skip), td0 (todo), t1
+    const w0 = runFixture('skip-todo.cjs', shardEnv(0, 2)); // t0 + td0
+    const w1 = runFixture('skip-todo.cjs', shardEnv(1, 2)); // s0 + t1
+    expect(w0.status).toBe(0);
+    expect(w1.status).toBe(0);
+    // Union: 2 passed (t0, t1) + 1 skipped (s0) + 1 todo (td0)
+    expect(w0.result.tests + w1.result.tests).toBe(4);
+    expect(w0.result.passed + w1.result.passed).toBe(2);
+    expect(w0.result.skipped + w1.result.skipped).toBe(1);
+    expect(w0.result.todo + w1.result.todo).toBe(1);
+  });
+
+  test('unsharded runs of skip/todo work', () => {
+    const r = runFixture('skip-todo.cjs');
+    expect(r.status).toBe(0);
+    expect(r.result).toMatchObject({ tests: 4, passed: 2, skipped: 1, todo: 1 });
+  });
+
+  test('out-of-range shard index falls back to unsharded', () => {
+    // shard index >= total should be rejected and run unsharded
+    const r = runFixture('keepalive-tests.cjs', shardEnv(2, 2));
+    expect(r.status).toBe(0);
+    expect(r.result.shard).toBeUndefined();
+    expect(r.result).toMatchObject({ tests: 5, passed: 5 });
+  });
 });

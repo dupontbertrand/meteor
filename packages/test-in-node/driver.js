@@ -46,7 +46,7 @@ state.pendingEvents = state.pendingEvents || [];
 let shard = null;
 try {
   const meta = JSON.parse(process.env.TEST_METADATA || '{}');
-  if (meta.shard && meta.shard.total > 1 && meta.shard.index >= 0) shard = meta.shard;
+  if (meta.shard && meta.shard.total > 1 && meta.shard.index >= 0 && meta.shard.index < meta.shard.total) shard = meta.shard;
 } catch (err) { /* no/invalid TEST_METADATA (pure Node) — run unsharded */ }
 
 if (shard) {
@@ -54,19 +54,28 @@ if (shard) {
   const nt = require('node:test');
   let topLevelSeen = 0;
   let depth = 0;
-  const wrap = (orig, isSuiteFn) => function (...args) {
-    if (depth === 0 && (topLevelSeen++ % shard.total) !== shard.index) return;
-    if (!isSuiteFn) return orig.apply(this, args);
-    // describe/suite bodies run synchronously at registration: raise depth so
-    // nested registrations are not re-filtered (the unit is the whole suite).
-    const body = args[args.length - 1];
-    if (typeof body === 'function') {
-      args[args.length - 1] = function (...bodyArgs) {
-        depth++;
-        try { return body.apply(this, bodyArgs); } finally { depth--; }
-      };
+  const wrap = (orig, isSuiteFn) => {
+    const wrapped = function (...args) {
+      if (depth === 0 && (topLevelSeen++ % shard.total) !== shard.index) return;
+      if (!isSuiteFn) return orig.apply(this, args);
+      // describe/suite bodies run synchronously at registration: raise depth so
+      // nested registrations are not re-filtered (the unit is the whole suite).
+      const body = args[args.length - 1];
+      if (typeof body === 'function') {
+        args[args.length - 1] = function (...bodyArgs) {
+          depth++;
+          try { return body.apply(this, bodyArgs); } finally { depth--; }
+        };
+      }
+      return orig.apply(this, args);
+    };
+    // Carry over all static properties (skip, only, todo, etc.) from original
+    Object.assign(wrapped, orig);
+    // Override registration-shaped sub-properties with filtered versions
+    for (const sub of ['skip', 'todo', 'only']) {
+      if (typeof orig[sub] === 'function') wrapped[sub] = wrap(orig[sub], isSuiteFn);
     }
-    return orig.apply(this, args);
+    return wrapped;
   };
   // test/it (and describe/suite) alias one function but are SEPARATE export
   // properties — each must be patched, or files importing the alias bypass
