@@ -45,8 +45,9 @@ state.unitTimings = state.unitTimings || {};
 // same serverJson.load order. A top-level describe is one unit (its nested
 // tests follow it wholesale).
 let shard = null;
+let meta = {};
 try {
-  const meta = JSON.parse(process.env.TEST_METADATA || '{}');
+  meta = JSON.parse(process.env.TEST_METADATA || '{}');
   if (meta.shard && meta.shard.total > 1 && meta.shard.index >= 0 && meta.shard.index < meta.shard.total) shard = meta.shard;
 } catch (err) { /* no/invalid TEST_METADATA (pure Node) — run unsharded */ }
 
@@ -67,12 +68,38 @@ if (shard || nameFilter) {
   const nt = require('node:test');
   let topLevelSeen = 0;
   let depth = 0;
+
+  // Duration-aware sharding (LPT): when the orchestrator supplies the previous
+  // run's per-unit timings, assign known units greedily to the least-loaded
+  // bucket instead of blind round-robin. Deterministic across workers: same
+  // timings JSON + same tie-breaks (ms desc, then name asc) → same buckets
+  // everywhere; each worker just keeps its own. Unknown units (new/renamed)
+  // fall back to round-robin over the unknowns only.
+  let lptBucket = null;
+  if (shard && meta.timings && typeof meta.timings === 'object') {
+    const entries = Object.entries(meta.timings)
+      .filter(([, ms]) => typeof ms === 'number' && ms >= 0)
+      .sort((a, b) => (b[1] - a[1]) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const load = new Array(shard.total).fill(0);
+    lptBucket = new Map();
+    for (const [name, ms] of entries) {
+      let min = 0;
+      for (let b = 1; b < shard.total; b++) if (load[b] < load[min]) min = b;
+      lptBucket.set(name, min);
+      load[min] += ms;
+    }
+  }
+
   const wrap = (orig, isSuiteFn) => {
     const wrapped = function (...args) {
       if (depth === 0) {
         const name = typeof args[0] === 'string' ? args[0] : '';
         if (nameFilter && name && !nameFilter(name)) return;      // filtered out
-        if (shard && (topLevelSeen++ % shard.total) !== shard.index) return;
+        if (shard) {
+          if (lptBucket && name && lptBucket.has(name)) {
+            if (lptBucket.get(name) !== shard.index) return;
+          } else if ((topLevelSeen++ % shard.total) !== shard.index) return;
+        }
       }
       if (!isSuiteFn) return orig.apply(this, args);
       // describe/suite bodies run synchronously at registration: raise depth so

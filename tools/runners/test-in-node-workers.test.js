@@ -149,3 +149,36 @@ describe('unit timings', () => {
     expect(Object.keys(r.timings).sort()).toEqual(['t0', 't2']);
   });
 });
+
+describe('duration-aware sharding (LPT)', () => {
+  const timings = { 't0': 1000, 't1': 10, 't2': 10, 'suite-a': 900 };
+  const lptEnv = (index, total) => ({
+    TEST_METADATA: JSON.stringify({ shard: { index, total }, timings }),
+  });
+
+  test('LPT separates the two slow units across two shards', () => {
+    // LPT order: t0(1000)→b0, suite-a(900)→b1, t1(10)→b1(910? non: b1=900 vs b0=1000 → b1), t2(10)→b1=910 vs b0=1000 → b1
+    // buckets: b0={t0}, b1={suite-a,t1,t2}
+    const w0 = runFixture('keepalive-tests.cjs', lptEnv(0, 2));
+    const w1 = runFixture('keepalive-tests.cjs', lptEnv(1, 2));
+    expect(w0.result).toMatchObject({ tests: 1 });            // t0
+    expect(w1.result).toMatchObject({ tests: 4 });            // suite-a(2) + t1 + t2
+    expect(w0.result.tests + w1.result.tests).toBe(5);
+  });
+
+  test('unknown units fall back to round-robin without disturbing LPT picks', () => {
+    const partial = { 't0': 1000, 'suite-a': 900 };           // t1, t2 inconnues
+    const env = (i) => ({ TEST_METADATA: JSON.stringify({ shard: { index: i, total: 2 }, timings: partial }) });
+    const w0 = runFixture('keepalive-tests.cjs', env(0));
+    const w1 = runFixture('keepalive-tests.cjs', env(1));
+    // LPT: t0→b0, suite-a→b1 ; inconnues t1,t2 en round-robin: t1→b0, t2→b1
+    expect(w0.result).toMatchObject({ tests: 2 });            // t0 + t1
+    expect(w1.result).toMatchObject({ tests: 3 });            // suite-a(2) + t2
+  });
+
+  test('timings without shard change nothing', () => {
+    const r = runFixture('keepalive-tests.cjs',
+      { TEST_METADATA: JSON.stringify({ timings }) });
+    expect(r.result).toMatchObject({ tests: 5, passed: 5 });
+  });
+});
