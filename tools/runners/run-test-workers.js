@@ -10,8 +10,12 @@ const { AppProcess } = require('./run-app.js');
 const runLog = require('./run-log.js');
 const utils = require('../utils/utils.js');
 const { loadIsopackage } = require('../tool-env/isopackets.js');
+const files = require('../fs/files');
 
 const RESULT_PREFIX = 'TEST_IN_NODE_RESULT ';
+const TIMINGS_PREFIX = 'TEST_IN_NODE_TIMINGS ';
+const TIMINGS_STATE_FILENAME = 'test-in-node-timings.json';
+const MAX_INJECTED_TIMINGS_JSON_LENGTH = 50000;
 const WORKER_TIMEOUT_MS =
   (+process.env.METEOR_TEST_WORKER_TIMEOUT_SECS || 900) * 1000;
 const KILL_GRACE_MS = Math.min(5000, WORKER_TIMEOUT_MS);
@@ -88,12 +92,39 @@ async function runTestWorkers(options) {
     }
   }
 
+  // Duration-aware sharding (LPT, packages/test-in-node/driver.js): read back
+  // the per-unit timings persisted by the previous parallel run, if any. A
+  // missing/corrupt/foreign-shaped file is treated as absent — round-robin
+  // sharding is always a safe fallback, never a hard failure.
+  const timingsStatePath = files.pathJoin(projectContext.projectLocalDir, TIMINGS_STATE_FILENAME);
+  let savedTimings = null;
+  try {
+    const parsed = JSON.parse(files.readFile(timingsStatePath, 'utf8'));
+    if (parsed && parsed.version === 1 && parsed.timings && typeof parsed.timings === 'object') {
+      savedTimings = parsed.timings;
+    }
+  } catch (err) { /* no state file yet, or unreadable/invalid — round-robin fallback */ }
+
+  // Bound the payload re-injected into every worker's TEST_METADATA env var:
+  // an unbounded timings map would grow with the suite forever and eventually
+  // blow past OS argv/env size limits.
+  let timingsToInject = null;
+  if (savedTimings) {
+    const serialized = JSON.stringify(savedTimings);
+    if (serialized.length <= MAX_INJECTED_TIMINGS_JSON_LENGTH) {
+      timingsToInject = savedTimings;
+    } else {
+      runLog.log(`test-in-node: timings map too large (${serialized.length} bytes) — falling back to round-robin sharding.`);
+    }
+  }
+
   // Deterministic ports: one random base, then +i — N independent random draws
   // would just multiply birthday collisions. A busy port most likely fails the
   // worker (exit != 0) with no retry — rare in the 20000-29999 range, and it
   // fails loudly; the timeout below is the backstop.
   const basePort = utils.randomPort();
 
+  const collectedTimings = {};
   const workers = [];
   const runs = [];
   for (let i = 0; i < workerCount; i++) {
@@ -114,12 +145,21 @@ async function runTestWorkers(options) {
         oplogUrl: null, // no per-worker oplog tailing; reactivity probes the server
         settings,
         nodeOptions,
-        testMetadata: { ...testMetadata, shard: { index: i, total: workerCount } },
+        testMetadata: {
+          ...testMetadata,
+          shard: { index: i, total: workerCount },
+          ...(timingsToInject ? { timings: timingsToInject } : {}),
+        },
         isTestWorker: true,
         onOutput: async (line, isStderr) => {
           if (!isStderr && line.startsWith(RESULT_PREFIX)) {
             try { worker.result = JSON.parse(line.slice(RESULT_PREFIX.length)); }
             catch (err) { /* malformed line — leave result null, code decides */ }
+            return;
+          }
+          if (!isStderr && line.startsWith(TIMINGS_PREFIX)) {
+            try { Object.assign(collectedTimings, JSON.parse(line.slice(TIMINGS_PREFIX.length))); }
+            catch (err) { /* malformed line — this worker's units just miss next run's timings */ }
             return;
           }
           await runLog.logAppOutput(`[w${i}] ${line}`, isStderr);
@@ -159,6 +199,17 @@ async function runTestWorkers(options) {
 
   try {
     await Promise.all(runs);
+
+    // Persist this run's merged timings for the next parallel run's LPT
+    // sharding. Best-effort: a write failure here must never fail the test
+    // run itself — it only means the next run falls back to round-robin.
+    if (Object.keys(collectedTimings).length > 0) {
+      try {
+        files.writeFile(timingsStatePath, JSON.stringify({ version: 1, timings: collectedTimings }));
+      } catch (err) {
+        runLog.log(`test-in-node: could not persist timings (${err.message}) — next run will use round-robin sharding.`);
+      }
+    }
 
     // Combined report (per-worker lines were already streamed with [wN] prefixes).
     const totals = { tests: 0, passed: 0, failed: 0, skipped: 0, todo: 0 };

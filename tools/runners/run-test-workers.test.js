@@ -79,6 +79,16 @@ describe('runTestWorkers (mocked workers)', () => {
       },
     }));
     jest.doMock('./run-log.js', () => ({ log: jest.fn(), logAppOutput: jest.fn() }));
+    // Overrides the file-wide `jest.mock('../fs/files', () => ({}))` above (same
+    // hoisting/override relationship as './run-log.js' just above) with fakes
+    // shaped like the real API: pathJoin joins segments, readFile/writeFile are
+    // jest.fn()s individual tests can reconfigure. Default readFile throws
+    // ENOENT — "no state file yet" is the common case.
+    jest.doMock('../fs/files', () => ({
+      pathJoin: (...args) => args.join('/'),
+      readFile: jest.fn(() => { throw new Error('ENOENT'); }),
+      writeFile: jest.fn(),
+    }));
     jest.doMock('../tool-env/isopackets.js', () => ({
       loadIsopackage: jest.fn(() => { loadIsopackageCalls++; throw new Error('should not be called for no-mongo'); }),
     }));
@@ -193,5 +203,38 @@ describe('runTestWorkers (mocked workers)', () => {
     });
     expect(mongoRunnersStarted).toHaveLength(0);
     delete process.env.METEOR_TEST_MONGO_PER_WORKER;
+  });
+
+  test('collects worker timings and persists the merged map', async () => {
+    mockBehavior = async (options) => {
+      const i = options.testMetadata.shard.index;
+      await options.onOutput(`TEST_IN_NODE_RESULT {"tests":1,"passed":1,"failed":0,"skipped":0,"todo":0}`, false);
+      await options.onOutput(`TEST_IN_NODE_TIMINGS {"u${i}":${100 + i}}`, false);
+      options.onExit(0, null);
+    };
+    const files = require('../fs/files');
+    const { runTestWorkers } = require('./run-test-workers.js');
+    await runTestWorkers({
+      projectContext: { projectLocalDir: '/fake/local', getProjectLocalDirectory: (s) => `/fake/local/${s}` },
+      bundlePath: '/x', mongoUrl: 'no-mongo-server', rootUrl: 'http://localhost/',
+      listenHost: undefined, settings: null, testMetadata: {}, nodeOptions: [], workerCount: 2,
+    });
+    expect(files.writeFile).toHaveBeenCalledWith(
+      '/fake/local/test-in-node-timings.json',
+      JSON.stringify({ version: 1, timings: { u0: 100, u1: 101 } }),
+    );
+  });
+
+  test('injects saved timings into every worker testMetadata', async () => {
+    const files = require('../fs/files');
+    files.readFile.mockImplementation(() => JSON.stringify({ version: 1, timings: { a: 5 } }));
+    const { runTestWorkers } = require('./run-test-workers.js');
+    await runTestWorkers({
+      projectContext: { projectLocalDir: '/fake/local', getProjectLocalDirectory: (s) => `/fake/local/${s}` },
+      bundlePath: '/x', mongoUrl: 'no-mongo-server', rootUrl: 'http://localhost/',
+      listenHost: undefined, settings: null, testMetadata: {}, nodeOptions: [], workerCount: 2,
+    });
+    expect(spawnedOptions[0].testMetadata.timings).toEqual({ a: 5 });
+    expect(spawnedOptions[1].testMetadata.timings).toEqual({ a: 5 });
   });
 });
