@@ -1,0 +1,140 @@
+// Stage 1 of the test-runner platform (#12162): opt-in parallel test workers.
+// The app is built ONCE by the normal AppRunner path; this module then spawns
+// N AppProcess children from that same bundle — each with its own port, its
+// own Mongo database (meteor_w<i> on the shared dev mongod) and a shard
+// descriptor — and aggregates their exit codes and TEST_IN_NODE_RESULT lines.
+// It is only reached behind --parallel-workers; the single-run path never
+// touches this file.
+
+const { AppProcess } = require('./run-app.js');
+const runLog = require('./run-log.js');
+const utils = require('../utils/utils.js');
+
+const RESULT_PREFIX = 'TEST_IN_NODE_RESULT ';
+const WORKER_TIMEOUT_MS =
+  (+process.env.METEOR_TEST_WORKER_TIMEOUT_SECS || 900) * 1000;
+
+function parseMongoUrl(url) {
+  const m = /^(mongodb(?:\+srv)?:\/\/[^/]+)(?:\/([^?]*))?(\?.*)?$/.exec(url || '');
+  if (!m) {
+    throw new Error('MONGO_URL not supported with parallel workers: ' + url);
+  }
+  const db = (m[2] || '').replace(/\/+$/, '') || 'meteor';
+  return { base: m[1], db, query: m[3] || '' };
+}
+
+function workerMongoUrl(baseUrl, index) {
+  const { base, db, query } = parseMongoUrl(baseUrl);
+  return `${base}/${db}_w${index}${query}`;
+}
+
+// Worker databases persist in the dev mongod between runs — drop them first so
+// a previous parallel run's data never leaks into this one.
+async function dropWorkerDatabases(baseUrl, count) {
+  const { MongoClient } = require('mongodb');
+  const client = new MongoClient(baseUrl);
+  try {
+    await client.connect();
+    for (let i = 0; i < count; i++) {
+      await client.db(parseMongoUrl(workerMongoUrl(baseUrl, i)).db).dropDatabase();
+    }
+  } finally {
+    await client.close();
+  }
+}
+
+async function runTestWorkers(options) {
+  const {
+    projectContext, bundlePath, mongoUrl, rootUrl, listenHost,
+    settings, testMetadata, nodeOptions, workerCount,
+  } = options;
+
+  await dropWorkerDatabases(mongoUrl, workerCount);
+
+  // Deterministic ports: one random base, then +i — N independent random draws
+  // would just multiply birthday collisions. A busy port is not fatal (tests
+  // run and exit regardless of the HTTP bind), the timeout below is the net.
+  const basePort = utils.randomPort();
+
+  const workers = [];
+  const runs = [];
+  for (let i = 0; i < workerCount; i++) {
+    const worker = { index: i, code: null, signal: null, result: null };
+    workers.push(worker);
+    runs.push(new Promise((resolve) => {
+      const proc = new AppProcess({
+        projectContext,
+        bundlePath,
+        port: basePort + i,
+        listenHost,
+        rootUrl,
+        mongoUrl: workerMongoUrl(mongoUrl, i),
+        oplogUrl: null, // no per-worker oplog tailing; reactivity probes the server
+        settings,
+        nodeOptions,
+        testMetadata: { ...testMetadata, shard: { index: i, total: workerCount } },
+        isTestWorker: true,
+        onOutput: async (line, isStderr) => {
+          if (!isStderr && line.startsWith(RESULT_PREFIX)) {
+            try { worker.result = JSON.parse(line.slice(RESULT_PREFIX.length)); }
+            catch (err) { /* malformed line — leave result null, code decides */ }
+            return;
+          }
+          await runLog.logAppOutput(`[w${i}] ${line}`, isStderr);
+        },
+        onListen: () => {},
+        onExit: (code, signal) => {
+          worker.code = code;
+          worker.signal = signal || null;
+          resolve();
+        },
+      });
+      const timer = setTimeout(() => {
+        worker.signal = worker.signal || 'TIMEOUT';
+        try { proc.proc && proc.proc.kill('SIGKILL'); } catch (err) { /* already gone */ }
+      }, WORKER_TIMEOUT_MS);
+      timer.unref();
+      proc.start();
+    }));
+  }
+
+  await Promise.all(runs);
+
+  // Combined report (per-worker lines were already streamed with [wN] prefixes).
+  const totals = { tests: 0, passed: 0, failed: 0, skipped: 0, todo: 0 };
+  let failedWorkers = 0;
+  for (const w of workers) {
+    if (w.result) {
+      for (const k of Object.keys(totals)) totals[k] += w.result[k] || 0;
+    }
+    const ok = w.code === 0 && !w.signal;
+    if (!ok) failedWorkers++;
+    runLog.log(
+      `  w${w.index}  ` +
+      (w.result
+        ? `${w.result.passed} passed${w.result.failed ? `, ${w.result.failed} failed` : ''} (${w.result.tests} tests)`
+        : 'no result') +
+      `  exit ${w.signal ? w.signal : w.code}`,
+      { arrow: false },
+    );
+  }
+  runLog.log(
+    `test-in-node · ${workerCount} workers — ` +
+    `${totals.passed} passed, ${totals.failed} failed, ` +
+    `${totals.skipped} skipped, ${totals.todo} todo (${totals.tests} tests)` +
+    (failedWorkers ? ` — ${failedWorkers} worker(s) failed` : ''),
+    { arrow: true },
+  );
+
+  // Exit-code contract, mirroring run-all.js:480-494 semantics:
+  // any signal/timeout → 255; any non-zero (or missing result) → 1; else 0.
+  let exitCode = 0;
+  for (const w of workers) {
+    if (w.signal) { exitCode = 255; break; }
+    if (w.code !== 0 || !w.result) exitCode = 1;
+  }
+  return { exitCode, workers };
+}
+
+exports.workerMongoUrl = workerMongoUrl;
+exports.runTestWorkers = runTestWorkers;
