@@ -69,8 +69,9 @@ async function runTestWorkers(options) {
   }
 
   // Deterministic ports: one random base, then +i — N independent random draws
-  // would just multiply birthday collisions. A busy port is not fatal (tests
-  // run and exit regardless of the HTTP bind), the timeout below is the net.
+  // would just multiply birthday collisions. A busy port most likely fails the
+  // worker (exit != 0) with no retry — rare in the 20000-29999 range, and it
+  // fails loudly; the timeout below is the backstop.
   const basePort = utils.randomPort();
 
   const workers = [];
@@ -113,7 +114,11 @@ async function runTestWorkers(options) {
         try { proc.proc && proc.proc.kill('SIGKILL'); } catch (err) { /* already gone */ }
       }, WORKER_TIMEOUT_MS);
       timer.unref();
-      proc.start();
+      proc.start().catch(() => {
+        // Pre-spawn failure (post-spawn errors already flow through onExit).
+        worker.code = worker.code === null ? 1 : worker.code;
+        resolve();
+      });
     }));
   }
 

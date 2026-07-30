@@ -284,6 +284,7 @@ Object.assign(AppProcess.prototype, {
       // the same shell/info.json), and no shared unix socket.
       delete env.METEOR_SHELL_DIR;
       delete env.UNIX_SOCKET_PATH;
+      delete env.MONGO_OPLOG_URL;
     } else {
       var shellDir = self.projectContext.getMeteorShellDirectory();
       files.mkdir_p(shellDir);

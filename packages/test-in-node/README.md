@@ -53,6 +53,10 @@ own port and its own Mongo database (`meteor_w<i>` on the shared dev mongod):
   registrations (a top-level `describe` moves wholesale with its nested tests).
   `node:test`'s own `--test-shard` does not apply here: test files are
   pre-loaded by the Meteor bundle, so the runner never discovers files.
+- Register tests through the **named** exports (`test`, `it`, `describe`,
+  `suite`). The callable default export (`const test = require('node:test')`)
+  and chained aliases (`test.describe(...)`) bypass the shard filter: the run
+  stays correct, but those tests execute on every worker instead of one.
 - Requires `--once` (no watch/rebuild while workers run). The exit code is 0
   only if every worker passed.
 - Worker databases are dropped before each run. Set

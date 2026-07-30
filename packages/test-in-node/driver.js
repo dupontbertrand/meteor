@@ -84,9 +84,9 @@ if (shard) {
   nt.it = wrap(nt.it, false);
   nt.describe = wrap(nt.describe, true);
   nt.suite = wrap(nt.suite, true);
-  // Anti-hang d'un shard vide : couvert par la sentinelle inconditionnelle du
-  // Stage 0 (enregistrée via le binding capturé AVANT ce patch — elle passe
-  // outre le filtre et garantit que la barrière se complète sur chaque shard).
+  // Empty-shard anti-hang: covered by the unconditional completion sentinel
+  // (registered through the binding captured BEFORE this patch installs — it
+  // bypasses the filter and guarantees the barrier completes on every shard).
 }
 
 // suite vs test is in data.details.type on test:complete — reliable at every nesting depth.
