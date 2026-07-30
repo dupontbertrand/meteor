@@ -6,7 +6,13 @@ Package.describe({
 
 Package.onUse(function (api) {
   api.use('ecmascript', 'server');
-  api.addFiles('driver.js', 'server');
+  // Weak: the Tinytest bridge (bridge.js) only activates when the package being
+  // tested actually pulls in tinytest (as every onTest block does). Weak avoids
+  // forcing tinytest into every bundle that uses this driver.
+  api.use('tinytest', 'server', { weak: true });
+  // Order matters: driver.js must install globalThis.__meteorTestInNode (and its
+  // rawTest binding) before bridge.js reads it.
+  api.addFiles(['driver.js', 'tinytest-assertions.js', 'bridge.js'], 'server');
   // The node:test reporter is NOT part of this package: node:test reporters must be
   // resolved by Node at process startup, so the Meteor tool ships it under tools/ and
   // auto-attaches it (see tools/runners/run-app.js). Resolving a loose file from an
