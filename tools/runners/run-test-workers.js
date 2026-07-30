@@ -9,6 +9,7 @@
 const { AppProcess } = require('./run-app.js');
 const runLog = require('./run-log.js');
 const utils = require('../utils/utils.js');
+const { loadIsopackage } = require('../tool-env/isopackets.js');
 
 const RESULT_PREFIX = 'TEST_IN_NODE_RESULT ';
 const WORKER_TIMEOUT_MS =
@@ -31,7 +32,9 @@ function workerMongoUrl(baseUrl, index) {
 // Worker databases persist in the dev mongod between runs — drop them first so
 // a previous parallel run's data never leaks into this one.
 async function dropWorkerDatabases(baseUrl, count) {
-  const { MongoClient } = require('mongodb');
+  const { MongoClient } = (await loadIsopackage(
+    'npm-mongo'
+  )).NpmModuleMongodb;
   const client = new MongoClient(baseUrl);
   try {
     await client.connect();
@@ -49,7 +52,13 @@ async function runTestWorkers(options) {
     settings, testMetadata, nodeOptions, workerCount,
   } = options;
 
-  await dropWorkerDatabases(mongoUrl, workerCount);
+  try {
+    await dropWorkerDatabases(mongoUrl, workerCount);
+  } catch (err) {
+    runLog.log(
+      `test-in-node: could not drop worker databases (${err.message}) — continuing; stale data may leak between runs.`
+    );
+  }
 
   // Deterministic ports: one random base, then +i — N independent random draws
   // would just multiply birthday collisions. A busy port is not fatal (tests
@@ -62,6 +71,7 @@ async function runTestWorkers(options) {
     const worker = { index: i, code: null, signal: null, result: null };
     workers.push(worker);
     runs.push(new Promise((resolve) => {
+      let timer;
       const proc = new AppProcess({
         projectContext,
         bundlePath,
@@ -84,12 +94,13 @@ async function runTestWorkers(options) {
         },
         onListen: () => {},
         onExit: (code, signal) => {
+          clearTimeout(timer);
           worker.code = code;
           worker.signal = signal || null;
           resolve();
         },
       });
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         worker.signal = worker.signal || 'TIMEOUT';
         try { proc.proc && proc.proc.kill('SIGKILL'); } catch (err) { /* already gone */ }
       }, WORKER_TIMEOUT_MS);
