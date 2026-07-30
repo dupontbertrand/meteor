@@ -139,6 +139,8 @@ var AppProcess = function (options) {
   self.autoRestart = options.autoRestart;
 
   self.hmrSecret = options.hmrSecret;
+  self.onOutput = options.onOutput || null;
+  self.isTestWorker = !!options.isTestWorker;
 
   self.proc = null;
   self.madeExitCallback = false;
@@ -162,13 +164,19 @@ Object.assign(AppProcess.prototype, {
         // connections.  (It does this because we told it to with
         // $METEOR_PRINT_ON_LISTEN.)
         self.onListen && await self.onListen();
+      } else if (self.onOutput) {
+        await self.onOutput(line, false);
       } else {
         await runLog.logAppOutput(line);
       }
     });
 
     eachline(self.proc.stderr, async function (line) {
-      await runLog.logAppOutput(line, true);
+      if (self.onOutput) {
+        await self.onOutput(line, true);
+      } else {
+        await runLog.logAppOutput(line, true);
+      }
     });
 
     // Watch for exit and for stdio to be fully closed (so that we don't miss
@@ -271,8 +279,19 @@ Object.assign(AppProcess.prototype, {
       delete env.METEOR_INSPECT_BRK;
     }
 
-    var shellDir = self.projectContext.getMeteorShellDirectory();
-    files.mkdir_p(shellDir);
+    if (self.isTestWorker) {
+      // Parallel test workers: no interactive shell (N workers would clobber
+      // the same shell/info.json), and no shared unix socket.
+      delete env.METEOR_SHELL_DIR;
+      delete env.UNIX_SOCKET_PATH;
+    } else {
+      var shellDir = self.projectContext.getMeteorShellDirectory();
+      files.mkdir_p(shellDir);
+
+      // We need to convert to OS path here because the running app doesn't
+      // have access to path translation functions
+      env.METEOR_SHELL_DIR = files.convertToOSPath(shellDir);
+    }
 
     var reifyCacheVersion = watch.sha1(
       self.projectContext.releaseFile.fullReleaseName,
@@ -282,9 +301,6 @@ Object.assign(AppProcess.prototype, {
     );
     files.mkdir_p(reifyCacheDir);
 
-    // We need to convert to OS path here because the running app doesn't
-    // have access to path translation functions
-    env.METEOR_SHELL_DIR = files.convertToOSPath(shellDir);
     env.METEOR_REIFY_CACHE_DIR = files.convertToOSPath(reifyCacheDir);
 
     env.METEOR_PARENT_PID =
@@ -1134,3 +1150,4 @@ Object.assign(AppRunner.prototype, {
 ///////////////////////////////////////////////////////////////////////////////
 
 exports.AppRunner = AppRunner;
+exports.AppProcess = AppProcess;
