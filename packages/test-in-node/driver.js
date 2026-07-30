@@ -82,10 +82,20 @@ function maybeFinalize() {
   // loop alive — HTTP + Mongo — so the process never drains on its own). Calling
   // process.exit() *immediately* after write() can truncate piped stdout, so we wait
   // for the write to be handled first.
+  // Machine-readable line for the Stage 1 orchestrator — MUST live in the same
+  // write() as the human summary: the exit fires from this write's callback,
+  // so everything in it is flushed through the pipe before we force-exit, and
+  // the line stays atomic when a parent multiplexes N workers' stdout.
+  const machine = {
+    tests: state.tests, passed: state.passed, failed: state.failed,
+    skipped: state.skipped, todo: state.todo,
+  };
+  if (state.shard) machine.shard = state.shard;
   process.stdout.write(
     `\n${c.bold('test-in-node')} ${c.gray('· node:test')}\n  ` +
     (parts.join(', ') || c.gray('no assertions')) +
-    c.gray(` (${state.tests} tests)`) + '\n\n',
+    c.gray(` (${state.tests} tests)`) + '\n' +
+    `TEST_IN_NODE_RESULT ${JSON.stringify(machine)}\n\n`,
     () => process.exit(state.failed > 0 ? 1 : 0),
   );
 }
