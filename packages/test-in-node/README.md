@@ -102,13 +102,24 @@ don't feed the duration-aware LPT sharding):
 
     meteor test-packages ejson --driver-package test-in-node --once
 
-- **Sharding** happens at the bridge, per **case** (not per top-level unit
-  like native `node:test` registrations): each `--parallel-workers` worker
-  runs its own slice of Tinytest's `ordered_tests`, roughly `N / workers`
-  cases each.
-- **Cases run sequentially** inside each worker, one at a time — matching
-  Tinytest's historical semantics of cases in a group sharing fixtures
-  (e.g. a Mongo collection) without racing each other.
+- **Sharding is opt-in** (`METEOR_TEST_SHARD_TINYTEST=1`) — by default,
+  under `--parallel-workers`, ALL bridged cases run sequentially on worker 0
+  only; every other worker skips the bridge parent entirely and contributes
+  nothing to this suite. Legacy Tinytest suites routinely depend on cases in
+  a group running in registration order against shared fixtures (a Mongo
+  collection, a DDP connection) — splitting cases across workers can
+  silently break that assumption instead of failing loudly. Per-case
+  sharding is only safe when cases are independent, which isn't a safe
+  default for suites the bridge didn't author:
+
+      METEOR_TEST_SHARD_TINYTEST=1 meteor test-packages my-package --driver-package test-in-node --once --parallel-workers 4
+
+  With the opt-in set, each worker runs its own slice of Tinytest's
+  `ordered_tests`, roughly `N / workers` cases each (case-granularity, not
+  top-level-unit granularity like native `node:test` registrations above).
+- **Cases run sequentially** within a worker's slice, one at a time —
+  matching Tinytest's historical semantics of cases in a group sharing
+  fixtures (e.g. a Mongo collection) without racing each other.
 - **`-f` / `--filter`** on bridged cases uses **Tinytest's own** substring
   filter (applied where Tinytest registers cases, before the bridge ever
   sees them), not this driver's regex-or-substring top-level-unit filter
@@ -135,6 +146,12 @@ Limits:
   first failure — including case-local cleanup — is skipped. Outcome-
   equivalent for pass/fail reporting, but cleanup written after a
   possibly-failing assertion won't run.
+  **Exception: `test.fail()` itself does not throw** — it records the
+  failure and returns, matching Tinytest semantics, precisely because
+  `test.fail(msg); <more code>` (timeout/defensive branches) is a common
+  Tinytest idiom; a throwing `fail()` would turn that idiom into an
+  uncaught exception instead of a clean recorded failure. Recorded failures
+  fail the bridged case once it completes.
 
 ## Node version note
 

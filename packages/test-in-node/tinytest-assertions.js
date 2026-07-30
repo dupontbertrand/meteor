@@ -14,11 +14,26 @@ function escapeRegExp(s) {
 }
 
 function makeTestProxy() {
+  // Stable per-test-run id, generated ONCE per proxy (== once per bridged
+  // Tinytest case). Mirrors real Tinytest's TestCaseResults: `this.id =
+  // Random.id()` set once in the constructor (packages/tinytest/tinytest.js:15)
+  // and `runId()` returning that same value (:110-111). Tinytest-authored
+  // tests widely assume this stability — some read `test.id` directly to
+  // build a unique fixture (e.g. packages/accounts-password/password_tests.js:1490),
+  // others call `test.runId()` more than once expecting the SAME value back
+  // (e.g. packages/mongo/tests/mongo_livedata_tests.js). A fresh random value
+  // per call broke both patterns under the bridge.
+  const id = 'bridge-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+
   // One-shot "expect the next assertion to fail" flag, set by expect_fail().
   // Every assertion-throwing method below is wrapped through guarded()/
   // guardedAsync(): on success the flag is disarmed; on throw, an armed flag
   // consumes itself and swallows the failure instead of propagating it.
   let expectingFail = false;
+
+  // Failures recorded by fail() (see below) — bridge-internal, read by
+  // bridge.js's runCase() after the case completes to fail the subtest.
+  const failures = [];
 
   function guarded(fn) {
     return (...args) => {
@@ -53,6 +68,10 @@ function makeTestProxy() {
   }
 
   const proxy = {
+    // Stable per-test-run id — see comment above. Real Tinytest exposes this
+    // as a plain property (this.id), not just through runId().
+    id,
+
     // No-op sleep for compat (returns a promise)
     sleep(ms = 0) {
       return new Promise(resolve => setTimeout(resolve, ms));
@@ -60,12 +79,29 @@ function makeTestProxy() {
 
     ok() { /* success — no-op in assert style */ },
 
-    fail: guarded((doc) => {
+    // Mirrors real Tinytest's fail() (packages/tinytest/tinytest.js:39-91):
+    // it does NOT throw, it records the failure and returns normally so the
+    // rest of the test case keeps running. This matters because `test.fail(msg);
+    // <more code>` is a common Tinytest idiom (timeout/defensive branches) —
+    // a throwing fail() turns that idiom into an uncaught exception instead
+    // of a clean recorded failure (see bridge.js's runCase(), which fails the
+    // subtest at the end if `_failures` is non-empty). Same expect_fail()
+    // interplay as every other assertion: an armed flag consumes itself and
+    // the failure is swallowed (not recorded).
+    fail(doc) {
+      if (expectingFail) {
+        expectingFail = false;
+        return;
+      }
       const msg = typeof doc === 'string'
         ? doc
         : (doc && doc.message) || JSON.stringify(doc);
-      assert.fail(msg);
-    }),
+      failures.push(msg);
+    },
+
+    // Bridge-internal: failures recorded by fail() above. Not part of the
+    // Tinytest API surface — read by bridge.js after a case completes.
+    _failures: failures,
 
     exception: guarded((err) => {
       throw err;
@@ -255,7 +291,7 @@ function makeTestProxy() {
     // Extra details attached to failures — no-op in bridge
     extraDetails: {},
 
-    runId() { return 'bridge-' + Math.random().toString(36).slice(2); },
+    runId() { return id; },
   };
 
   return proxy;

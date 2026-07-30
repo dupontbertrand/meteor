@@ -66,10 +66,28 @@ if (g && g.rawTest) {
       // to dodge that. So the bridge re-implements shard assignment itself,
       // at case granularity, using the same {index, total} the driver
       // already computed from TEST_METADATA.
+      //
+      // Sharding bridged cases is OPT-IN (METEOR_TEST_SHARD_TINYTEST=1).
+      // Legacy Tinytest suites routinely depend on cases in a group running
+      // in registration order against shared fixtures (a Mongo collection, a
+      // DDP connection) — splitting cases across workers silently breaks
+      // that assumption instead of failing loudly (see the mongo 228-vs-231
+      // parallel case-count discrepancy diagnosed in the Stage 2 campaign).
+      // Per-case sharding is only safe when cases are independent, which
+      // isn't a safe default for suites the bridge didn't author. So by
+      // default all bridged cases run sequentially on worker 0 only, exactly
+      // as they would under Tinytest itself; other workers contribute
+      // nothing to this suite.
       const shard = g.shard;
-      const mine = shard
-        ? cases.filter((_, i) => i % shard.total === shard.index)
-        : cases;
+      let mine = cases;
+      if (shard) {
+        if (process.env.METEOR_TEST_SHARD_TINYTEST === '1') {
+          mine = cases.filter((_, i) => i % shard.total === shard.index);
+        } else if (shard.index !== 0) {
+          t.skip('bridged tinytest cases run on worker 0 (sequential-safe); set METEOR_TEST_SHARD_TINYTEST=1 to shard them');
+          return;
+        }
+      }
 
       for (const c of mine) {
         await t.test(c.name, () => runCase(c));
@@ -81,11 +99,23 @@ if (g && g.rawTest) {
 // Promisifies Tinytest's dual callback/promise calling convention
 // (tinytest.js TestCase#run: `this.func(results, resolve)`, optionally
 // returning a thenable — see Tinytest.add vs addAsync).
+//
+// test.fail() (tinytest-assertions.js) records into the proxy's `_failures`
+// instead of throwing, matching real Tinytest semantics — so a case that
+// called fail() still resolves normally above. Check `_failures` once the
+// case is done and fail the node:test subtest here if anything was
+// recorded, otherwise a case that only ever calls fail() would silently
+// report green.
 function runCase(c) {
+  const proxy = makeTestProxy();
   return new Promise((resolve, reject) => {
-    const r = c.func(makeTestProxy(), resolve);
+    const r = c.func(proxy, resolve);
     if (r && typeof r.then === 'function') {
       r.then(resolve, reject);
+    }
+  }).then(() => {
+    if (proxy._failures.length) {
+      throw new Error('tinytest recorded failures: ' + proxy._failures.join('; '));
     }
   });
 }

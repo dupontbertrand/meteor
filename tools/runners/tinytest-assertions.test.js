@@ -326,12 +326,42 @@ describe('makeTestProxy', () => {
   });
 
   describe('fail / ok / exception', () => {
-    test('fail always throws', () => {
-      expect(() => proxy.fail('nope')).toThrow();
+    // Real Tinytest's fail() records and returns — see FIX 2 in the
+    // tinytest-assertions.js header comment. Non-throwing is what lets
+    // `test.fail(msg); onComplete();` (a common timeout/defensive idiom,
+    // 44+ call sites across the packages surveyed by the Stage 2 campaign)
+    // keep running instead of hanging on an uncaught exception.
+    test('fail does not throw', () => {
+      expect(() => proxy.fail('nope')).not.toThrow();
     });
 
-    test('fail accepts a doc object with a message', () => {
-      expect(() => proxy.fail({ message: 'doc failure' })).toThrow(/doc failure/);
+    test('fail records a string message into _failures', () => {
+      proxy.fail('nope');
+      expect(proxy._failures).toEqual(['nope']);
+    });
+
+    test('fail accepts a doc object with a message and records it', () => {
+      proxy.fail({ message: 'doc failure' });
+      expect(proxy._failures).toEqual(['doc failure']);
+    });
+
+    test('a later fail() records again (accumulates)', () => {
+      proxy.fail('first');
+      proxy.fail('second');
+      expect(proxy._failures).toEqual(['first', 'second']);
+    });
+
+    test('expect_fail() + fail() consumes the flag and records nothing', () => {
+      proxy.expect_fail();
+      proxy.fail('swallowed');
+      expect(proxy._failures).toEqual([]);
+    });
+
+    test('after a swallowed fail(), the NEXT fail() records normally', () => {
+      proxy.expect_fail();
+      proxy.fail('swallowed');
+      proxy.fail('recorded');
+      expect(proxy._failures).toEqual(['recorded']);
     });
 
     test('ok never throws', () => {
@@ -354,13 +384,37 @@ describe('makeTestProxy', () => {
     });
   });
 
-  describe('extraDetails / runId', () => {
+  describe('extraDetails / runId / id', () => {
     test('extraDetails is present as an object', () => {
       expect(typeof proxy.extraDetails).toBe('object');
     });
 
     test('runId returns a string', () => {
       expect(typeof proxy.runId()).toBe('string');
+    });
+
+    test('id is present as a string property', () => {
+      expect(typeof proxy.id).toBe('string');
+    });
+
+    // FIX 1: real Tinytest generates test.id ONCE per test run (Random.id()
+    // in the TestCaseResults constructor) and runId() returns that same
+    // value every time it's called — Tinytest-authored tests rely on both
+    // reading test.id directly and calling test.runId() more than once and
+    // getting the same answer back.
+    test('runId() is stable across repeated calls', () => {
+      const first = proxy.runId();
+      const second = proxy.runId();
+      expect(first).toBe(second);
+    });
+
+    test('proxy.id === proxy.runId()', () => {
+      expect(proxy.id).toBe(proxy.runId());
+    });
+
+    test('id is distinct between two different proxies', () => {
+      const other = makeTestProxy();
+      expect(proxy.id).not.toBe(other.id);
     });
   });
 
