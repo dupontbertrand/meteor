@@ -2210,9 +2210,10 @@ testCommandOptions = {
     'driver-package': { type: String },
 
     // Undocumented, experimental (Stage 1 of the test-runner platform,
-    // discussion #12162): run N parallel workers from one build. Requires
+    // discussion #12162): run N parallel workers from one build. Takes a
+    // number >= 2 or 'auto' (machine parallelism). Requires
     // --driver-package test-in-node and --once.
-    'parallel-workers': { type: Number },
+    'parallel-workers': { type: String },
 
     // Sets the path of where the temp app should be created
     'test-app-path': { type: String },
@@ -2534,10 +2535,21 @@ async function doTestCommand(options) {
   options.cordovaRunner = cordovaRunner;
 
   if (options['parallel-workers'] !== undefined) {
-    if (!(options['parallel-workers'] >= 2)) {
+    const rawWorkers = options['parallel-workers'];
+    let parallelWorkers;
+    if (rawWorkers === 'auto') {
+      parallelWorkers = Math.max(2, require('os').availableParallelism());
+    } else if (/^[0-9]+$/.test(rawWorkers)) {
+      parallelWorkers = parseInt(rawWorkers, 10);
+    } else {
+      Console.error("--parallel-workers takes a number >= 2, or 'auto'.");
+      return 1;
+    }
+    if (!(parallelWorkers >= 2)) {
       Console.error("--parallel-workers requires a value >= 2.");
       return 1;
     }
+    options.parallelWorkers = parallelWorkers;
     if (!options.once) {
       Console.error("--parallel-workers requires --once (no watch/rebuild while workers run).");
       return 1;
@@ -2672,7 +2684,7 @@ var runTestAppForPackages = async function (projectContext, options) {
       disableOplog: options['disable-oplog'],
       settingsFile: options.settings,
       testMetadata: global.testCommandMetadata,
-      parallelWorkers: options['parallel-workers'],
+      parallelWorkers: options.parallelWorkers,
       banner: options['show-test-app-path'] ? null : "Tests",
       buildOptions: buildOptions,
       rootUrl: process.env.ROOT_URL,
