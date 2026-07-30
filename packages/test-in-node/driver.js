@@ -14,6 +14,15 @@ const { after, test } = require('node:test');
 // excluded from the reported tallies (see onEvent).
 const SENTINEL_NAME = 'test-in-node · completion sentinel';
 
+// The Tinytest bridge (bridge.js) registers ONE rawTest parent under this
+// exact name, with the bridged Tinytest cases as its subtests (see bridge.js
+// for why it must go through rawTest instead of the shard/filter-wrapped
+// test binding). Like the sentinel, the parent itself is bookkeeping — the
+// subtests are the real tests — so it is excluded from both the tally and
+// unitTimings below. Kept in sync with the identical literal in bridge.js
+// (a comment there points back here).
+const BRIDGE_PARENT_NAME = 'tinytest (bridged)';
+
 const c = {
   green: s => `\x1b[32m${s}\x1b[0m`, red: s => `\x1b[31m${s}\x1b[0m`,
   yellow: s => `\x1b[33m${s}\x1b[0m`, gray: s => `\x1b[90m${s}\x1b[0m`, bold: s => `\x1b[1m${s}\x1b[0m`,
@@ -37,6 +46,10 @@ state.unitTimings = state.unitTimings || {};
 // Reserved for integrations (the Tinytest bridge) that manage their own sharding/filtering
 // and must bypass the registration wrap.
 state.rawTest = state.rawTest || test;
+// Single source of truth for the bridge parent's name: bridge.js reads this instead of
+// duplicating the literal, so the name used at registration (bridge.js) and the name
+// checked for exclusion (onEvent below) can never drift out of sync.
+state.bridgeParentName = state.bridgeParentName || BRIDGE_PARENT_NAME;
 
 // ---- Registration filter: shard + name (Stage 1, parallel workers) ---------
 // The orchestrator assigns this worker a shard {index, total} via TEST_METADATA.
@@ -147,12 +160,12 @@ state.onEvent = function (event) {
       break;
     case 'test:complete':              // terminal for EVERY outcome → completed never stalls
       state.completed++;
-      if (d.nesting === 0 && d.name !== SENTINEL_NAME) {
+      if (d.nesting === 0 && d.name !== SENTINEL_NAME && d.name !== BRIDGE_PARENT_NAME) {
         state.unitTimings[d.name] =
           Math.max(0, Math.round((d.details && d.details.duration_ms) || 0));
       }
       if (isSuite(d)) { state.suites++; break; }  // suites carry details.passed too — exclude
-      if (d.name === SENTINEL_NAME) break;        // barrier bookkeeping only — not a real test
+      if (d.name === SENTINEL_NAME || d.name === BRIDGE_PARENT_NAME) break; // barrier/bridge bookkeeping only — not a real test
       state.tests++;                              //   them from the pass/fail tally (no double-count)
       if (d.skip) state.skipped++;                // NB: skipped/todo also have details.passed:true,
       else if (d.todo) state.todo++;              //     so skip/todo MUST be checked before passed.

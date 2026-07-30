@@ -36,13 +36,21 @@ const g = globalThis.__meteorTestInNode;
 // Driver not loaded (shouldn't happen — driver.js is addFiles'd before this
 // file — but bail rather than throw if it ever does).
 if (g && g.rawTest) {
+  // Read the parent's name from the driver instead of duplicating the string
+  // literal here: driver.js excludes this exact name from the tally and from
+  // unitTimings (BRIDGE_PARENT_NAME, next to SENTINEL_NAME) — registration
+  // here and exclusion there MUST use the identical name, and sharing it
+  // through globalThis state (rather than two hand-synced literals) makes
+  // that structurally impossible to drift.
+  const BRIDGE_PARENT_NAME = g.bridgeParentName;
+
   // Weak dep: tinytest may not be in the tested package's bundle at all. In
   // that case this file must be a complete no-op — no parent registered, no
   // trace in the tally.
   if (typeof Package !== 'undefined' && Package.tinytest) {
     const started = new Promise((resolve) => Meteor.startup(resolve));
 
-    g.rawTest('tinytest (bridged)', async (t) => {
+    g.rawTest(BRIDGE_PARENT_NAME, async (t) => {
       await started;
 
       const cases = Package.tinytest.Tinytest._TestManager.ordered_tests;

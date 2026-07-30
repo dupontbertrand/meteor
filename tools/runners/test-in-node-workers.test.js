@@ -200,3 +200,23 @@ describe('rawTest bypass', () => {
     expect(f.result).toMatchObject({ tests: 2, passed: 2 });
   });
 });
+
+describe('bridge parent exclusion', () => {
+  // bridge.js registers exactly one rawTest parent named 'tinytest (bridged)'
+  // with the bridged Tinytest cases as its subtests. The parent itself must
+  // not inflate the tally (same mechanic as the completion sentinel) nor
+  // pollute unitTimings (a whole-batch duration would be meaningless LPT
+  // input; per-bridged-case LPT is a documented follow-up).
+  test('the bridge parent does not count toward the tally', () => {
+    const r = runFixture('bridge-parent.cjs');
+    expect(r.status).toBe(0);
+    expect(r.result).toMatchObject({ tests: 2, passed: 2 }); // only the 2 subtests, not the parent
+  });
+
+  test('the bridge parent is excluded from unitTimings under sharding', () => {
+    const r = runFixture('bridge-parent.cjs', shardEnv(0, 2));
+    expect(r.status).toBe(0);
+    expect(r.timings).not.toBeNull();
+    expect(Object.keys(r.timings)).not.toContain('tinytest (bridged)');
+  });
+});
