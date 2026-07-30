@@ -90,6 +90,42 @@ own port and its own Mongo database (`meteor_w<i>` on the shared dev mongod):
   `meteor test-packages` with `--test-app-path`, get balanced shards from the
   second run on. The first run always uses round-robin.
 
+## Tinytest compatibility (bridge)
+
+If the package under test still uses `Tinytest.add` / `Tinytest.addAsync`
+(the normal `api.use('tinytest', ...)` `onTest` setup), those suites run
+**unmodified** under this driver — nothing in the tested package changes.
+The driver detects `tinytest` in the test bundle and bridges its registered
+cases into `node:test`, so they get the same parallelism, LPT sharding and
+aggregation as native `node:test` tests:
+
+    meteor test-packages ejson --driver-package test-in-node --once
+
+- **Sharding** happens at the bridge, per **case** (not per top-level unit
+  like native `node:test` registrations): each `--parallel-workers` worker
+  runs its own slice of Tinytest's `ordered_tests`, roughly `N / workers`
+  cases each.
+- **Cases run sequentially** inside each worker, one at a time — matching
+  Tinytest's historical semantics of cases in a group sharing fixtures
+  (e.g. a Mongo collection) without racing each other.
+- **`-f` / `--filter`** on bridged cases uses **Tinytest's own** substring
+  filter (applied where Tinytest registers cases, before the bridge ever
+  sees them), not this driver's regex-or-substring top-level-unit filter
+  described above.
+- **`expect_fail()`** is supported with one-shot semantics: it arms a flag
+  that the next failing assertion consumes (swallowing that one failure);
+  any assertion that succeeds first disarms it again.
+
+Limits:
+- **Server-only** — same as every other test file under this driver;
+  Tinytest suites that only ran client-side are out of scope for the
+  bridge.
+- **No per-case LPT** — the bridge's own parent test (an implementation
+  detail, not a real test) is excluded from both the pass/fail tally and
+  `TEST_IN_NODE_TIMINGS`, so bridged cases currently don't feed the
+  duration-aware sharding described above at all (not even as one lumped
+  unit). Per-case LPT for bridged suites is a documented follow-up.
+
 ## Node version note
 
 The driver relies on `node:test`'s `test:complete` event (Node ≥ 20.13). Inside
