@@ -53,6 +53,10 @@ reports a compact pass/fail/skip/todo summary and exits non-zero if any test fai
 to a literal substring match otherwise. It composes with `--parallel-workers`:
 the round-robin shard assignment runs over the already-filtered set of units.
 
+> Note: the same named-exports caveat as sharding applies to filtering — tests
+> registered through the callable default export (`const test = require('node:test')`)
+> or chained aliases (`test.describe(...)`) bypass the filter and still execute.
+
 > Note: this differs from tinytest's own `--filter`, which matches the
 > pattern as a literal substring only (no regex).
 

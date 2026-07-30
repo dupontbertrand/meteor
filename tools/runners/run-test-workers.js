@@ -126,6 +126,7 @@ async function runTestWorkers(options) {
       }, WORKER_TIMEOUT_MS);
       timer.unref();
       proc.start().catch((err) => {
+        clearTimeout(timer);
         // Pre-spawn failure (post-spawn errors already flow through onExit).
         runLog.log(`[w${i}] failed to start: ${err.message}`, { arrow: false });
         worker.code = worker.code === null ? 1 : worker.code;
