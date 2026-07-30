@@ -157,8 +157,8 @@ describe('duration-aware sharding (LPT)', () => {
   });
 
   test('LPT separates the two slow units across two shards', () => {
-    // LPT order: t0(1000)→b0, suite-a(900)→b1, t1(10)→b1(910? non: b1=900 vs b0=1000 → b1), t2(10)→b1=910 vs b0=1000 → b1
-    // buckets: b0={t0}, b1={suite-a,t1,t2}
+    // LPT trace: t0(1000)→b0; suite-a(900)→b1; t1(10)→b1 (900<1000); t2(10)→b1 (910<1000).
+    // Buckets: b0={t0}, b1={suite-a,t1,t2}.
     const w0 = runFixture('keepalive-tests.cjs', lptEnv(0, 2));
     const w1 = runFixture('keepalive-tests.cjs', lptEnv(1, 2));
     expect(w0.result).toMatchObject({ tests: 1 });            // t0

@@ -83,6 +83,12 @@ own port and its own Mongo database (`meteor_w<i>` on the shared dev mongod):
   `METEOR_TEST_WORKER_TIMEOUT_SECS` (default 900) to bound a hung worker.
 - `METEOR_TEST_MONGO_PER_WORKER=1` (experimental) gives each worker its own
   dedicated mongod instead of a database on the shared dev mongod.
+- **Duration-aware sharding:** when a previous run's per-unit timings are
+  available, units are distributed by measured duration (longest-first, to the
+  least-loaded worker) instead of round-robin. Timings persist in
+  `.meteor/local/test-in-node-timings.json` — so `meteor test`, or
+  `meteor test-packages` with `--test-app-path`, get balanced shards from the
+  second run on. The first run always uses round-robin.
 
 ## Node version note
 
