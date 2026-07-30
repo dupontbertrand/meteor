@@ -57,6 +57,8 @@ describe('runTestWorkers (mocked workers)', () => {
   let spawnedOptions;
   let loadIsopackageCalls;
   let mockBehavior;
+  let mongoRunnersStarted;
+  let mongoRunnersStopped;
 
   beforeEach(() => {
     jest.resetModules();
@@ -80,6 +82,17 @@ describe('runTestWorkers (mocked workers)', () => {
     jest.doMock('../tool-env/isopackets.js', () => ({
       loadIsopackage: jest.fn(() => { loadIsopackageCalls++; throw new Error('should not be called for no-mongo'); }),
     }));
+    mongoRunnersStarted = [];
+    mongoRunnersStopped = 0;
+    jest.doMock('./run-mongo.js', () => ({
+      MongoRunner: class {
+        constructor(opts) { this.opts = opts; mongoRunnersStarted.push(opts); }
+        async start() {}
+        mongoUrl() { return `mock://w${mongoRunnersStarted.indexOf(this.opts)}/meteor`; }
+        oplogUrl() { return null; }
+        async stop() { mongoRunnersStopped++; }
+      },
+    }));
   });
 
   afterEach(() => {
@@ -87,6 +100,7 @@ describe('runTestWorkers (mocked workers)', () => {
     // skipped if an expect() throws, leaking the value into process.env for
     // the rest of the Jest worker (resetModules doesn't reset env vars).
     delete process.env.METEOR_TEST_WORKER_TIMEOUT_SECS;
+    delete process.env.METEOR_TEST_MONGO_PER_WORKER;
   });
 
   test('no-mongo sentinel skips db work and aggregates a failing worker to exit 1', async () => {
@@ -140,4 +154,44 @@ describe('runTestWorkers (mocked workers)', () => {
     });
     expect(exitCode).toBe(255);
   }, 10000);
+
+  test('METEOR_TEST_MONGO_PER_WORKER spawns one MongoRunner per worker and stops them', async () => {
+    process.env.METEOR_TEST_MONGO_PER_WORKER = '1';
+    // Override the default mockBehavior (which fails worker index >= 1 on
+    // purpose, for the sentinel/aggregation test above): this test asserts a
+    // clean exitCode 0 so it needs both workers to succeed.
+    mockBehavior = async (options) => {
+      await options.onOutput(
+        'TEST_IN_NODE_RESULT {"tests":1,"passed":1,"failed":0,"skipped":0,"todo":0}',
+        false,
+      );
+      options.onExit(0, null);
+    };
+    const { runTestWorkers } = require('./run-test-workers.js');
+    const { exitCode } = await runTestWorkers({
+      projectContext: { getProjectLocalDirectory: (s) => `/fake/local/${s}` },
+      bundlePath: '/x', mongoUrl: 'mongodb://127.0.0.1:4301/meteor',
+      rootUrl: 'http://localhost/', listenHost: undefined, settings: null,
+      testMetadata: {}, nodeOptions: [], workerCount: 2,
+    });
+    expect(exitCode).toBe(0);
+    expect(mongoRunnersStarted).toHaveLength(2);              // one per worker
+    expect(mongoRunnersStarted[0].projectLocalDir).toMatch(/test-worker-dbs\/w0$/);
+    expect(new Set(mongoRunnersStarted.map(r => r.port)).size).toBe(2); // distinct ports
+    expect(spawnedOptions[0].mongoUrl).toBe('mock://w0/meteor'); // runner's own URL, not the shared _w0
+    expect(mongoRunnersStopped).toBe(2);                      // torn down in finally
+    delete process.env.METEOR_TEST_MONGO_PER_WORKER;
+  });
+
+  test('per-worker mongod is ignored under the no-mongo sentinel', async () => {
+    process.env.METEOR_TEST_MONGO_PER_WORKER = '1';
+    const { runTestWorkers } = require('./run-test-workers.js');
+    await runTestWorkers({
+      projectContext: {}, bundlePath: '/x', mongoUrl: 'no-mongo-server',
+      rootUrl: 'http://localhost/', listenHost: undefined, settings: null,
+      testMetadata: {}, nodeOptions: [], workerCount: 2,
+    });
+    expect(mongoRunnersStarted).toHaveLength(0);
+    delete process.env.METEOR_TEST_MONGO_PER_WORKER;
+  });
 });

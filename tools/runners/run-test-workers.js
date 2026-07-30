@@ -59,7 +59,26 @@ async function runTestWorkers(options) {
   // to every worker unchanged, mirroring the single-process path.
   const hasMongo = !!mongoUrl && mongoUrl !== 'no-mongo-server';
 
-  if (hasMongo) {
+  const mongoPerWorker = hasMongo && process.env.METEOR_TEST_MONGO_PER_WORKER === '1';
+  let workerMongoRunners = [];
+
+  if (mongoPerWorker) {
+    // Experimental: one dedicated mongod per worker (RFC §6 fallback). Removes
+    // shared-mongod contention at the cost of N mongod boots + N replSet inits.
+    // The dev mongod started by run-all keeps running, unused by the workers.
+    // dbPath ends in /db on purpose: findMongoPids (run-mongo.js:241) only
+    // recognizes such paths, and each runner gets its own port + dbPath so
+    // its startup findMongoAndKillItDead cannot touch the shared mongod.
+    const { MongoRunner } = require('./run-mongo.js');
+    const baseDir = projectContext.getProjectLocalDirectory('test-worker-dbs');
+    const mongoBasePort = utils.randomPort();
+    workerMongoRunners = Array.from({ length: workerCount }, (_, i) => new MongoRunner({
+      projectLocalDir: `${baseDir}/w${i}`,
+      port: mongoBasePort + i,
+      onFailure: () => {},
+    }));
+    await Promise.all(workerMongoRunners.map((r) => r.start()));
+  } else if (hasMongo) {
     try {
       await dropWorkerDatabases(mongoUrl, workerCount);
     } catch (err) {
@@ -89,7 +108,9 @@ async function runTestWorkers(options) {
         port: basePort + i,
         listenHost,
         rootUrl,
-        mongoUrl: hasMongo ? workerMongoUrl(mongoUrl, i) : mongoUrl,
+        mongoUrl: mongoPerWorker
+          ? workerMongoRunners[i].mongoUrl()
+          : (hasMongo ? workerMongoUrl(mongoUrl, i) : mongoUrl),
         oplogUrl: null, // no per-worker oplog tailing; reactivity probes the server
         settings,
         nodeOptions,
@@ -136,43 +157,52 @@ async function runTestWorkers(options) {
     }));
   }
 
-  await Promise.all(runs);
+  try {
+    await Promise.all(runs);
 
-  // Combined report (per-worker lines were already streamed with [wN] prefixes).
-  const totals = { tests: 0, passed: 0, failed: 0, skipped: 0, todo: 0 };
-  let failedWorkers = 0;
-  for (const w of workers) {
-    if (w.result) {
-      for (const k of Object.keys(totals)) totals[k] += w.result[k] || 0;
+    // Combined report (per-worker lines were already streamed with [wN] prefixes).
+    const totals = { tests: 0, passed: 0, failed: 0, skipped: 0, todo: 0 };
+    let failedWorkers = 0;
+    for (const w of workers) {
+      if (w.result) {
+        for (const k of Object.keys(totals)) totals[k] += w.result[k] || 0;
+      }
+      const ok = w.code === 0 && !w.signal;
+      if (!ok) failedWorkers++;
+      runLog.log(
+        `  w${w.index}  ` +
+        (w.result
+          ? `${w.result.passed} passed${w.result.failed ? `, ${w.result.failed} failed` : ''} (${w.result.tests} tests)`
+          : 'no result') +
+        `  exit ${w.signal ? w.signal : w.code}` +
+        (w.durationMs != null ? ` [${(w.durationMs / 1000).toFixed(1)}s]` : ''),
+        { arrow: false },
+      );
     }
-    const ok = w.code === 0 && !w.signal;
-    if (!ok) failedWorkers++;
     runLog.log(
-      `  w${w.index}  ` +
-      (w.result
-        ? `${w.result.passed} passed${w.result.failed ? `, ${w.result.failed} failed` : ''} (${w.result.tests} tests)`
-        : 'no result') +
-      `  exit ${w.signal ? w.signal : w.code}` +
-      (w.durationMs != null ? ` [${(w.durationMs / 1000).toFixed(1)}s]` : ''),
-      { arrow: false },
+      `test-in-node · ${workerCount} workers — ` +
+      `${totals.passed} passed, ${totals.failed} failed, ` +
+      `${totals.skipped} skipped, ${totals.todo} todo (${totals.tests} tests)` +
+      (failedWorkers ? ` — ${failedWorkers} worker(s) failed` : ''),
+      { arrow: true },
     );
-  }
-  runLog.log(
-    `test-in-node · ${workerCount} workers — ` +
-    `${totals.passed} passed, ${totals.failed} failed, ` +
-    `${totals.skipped} skipped, ${totals.todo} todo (${totals.tests} tests)` +
-    (failedWorkers ? ` — ${failedWorkers} worker(s) failed` : ''),
-    { arrow: true },
-  );
 
-  // Exit-code contract, mirroring run-all.js:480-494 semantics:
-  // any signal/timeout → 255; any non-zero (or missing result) → 1; else 0.
-  let exitCode = 0;
-  for (const w of workers) {
-    if (w.signal) { exitCode = 255; break; }
-    if (w.code !== 0 || !w.result) exitCode = 1;
+    // Exit-code contract, mirroring run-all.js:480-494 semantics:
+    // any signal/timeout → 255; any non-zero (or missing result) → 1; else 0.
+    let exitCode = 0;
+    for (const w of workers) {
+      if (w.signal) { exitCode = 255; break; }
+      if (w.code !== 0 || !w.result) exitCode = 1;
+    }
+    return { exitCode, workers };
+  } finally {
+    // MongoRunner#stop (run-mongo.js:1038) is synchronous and does not return
+    // a promise — wrap the call itself so a sync throw is caught the same way
+    // as a rejected promise, instead of calling .catch() on its return value.
+    await Promise.all(workerMongoRunners.map((r) =>
+      Promise.resolve().then(() => r.stop()).catch(() => {})
+    ));
   }
-  return { exitCode, workers };
 }
 
 exports.workerMongoUrl = workerMongoUrl;

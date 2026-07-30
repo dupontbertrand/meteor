@@ -81,6 +81,8 @@ own port and its own Mongo database (`meteor_w<i>` on the shared dev mongod):
   only if every worker passed.
 - Worker databases are dropped before each run. Set
   `METEOR_TEST_WORKER_TIMEOUT_SECS` (default 900) to bound a hung worker.
+- `METEOR_TEST_MONGO_PER_WORKER=1` (experimental) gives each worker its own
+  dedicated mongod instead of a database on the shared dev mongod.
 
 ## Node version note
 
