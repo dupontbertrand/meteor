@@ -220,3 +220,29 @@ describe('bridge parent exclusion', () => {
     expect(Object.keys(r.timings)).not.toContain('tinytest (bridged)');
   });
 });
+
+describe('bridge parent failure attribution', () => {
+  // The magic-name exclusion above must not swallow a REAL failure of the
+  // bridge parent (or a same-named user test) — only a parent that failed
+  // solely because a subtest failed is safe to drop, since the subtest was
+  // already tallied. Verified discriminator: node:test sets
+  // details.error.failureType === 'subtestsFailed' for the former,
+  // 'testCodeFailure' (or nothing swallow-worthy) for the latter.
+  test('a bridge parent that throws in its own body is not swallowed', () => {
+    const r = runFixture('bridge-parent-throws.cjs');
+    expect(r.status).toBe(1);
+    expect(r.result).toMatchObject({ tests: 1, passed: 1, failed: 1 });
+  });
+
+  test('a user test spoofing the magic bridge-parent name still fails loudly', () => {
+    const r = runFixture('magic-name-spoof.cjs');
+    expect(r.status).toBe(1);
+    expect(r.result.failed).toBeGreaterThanOrEqual(1);
+  });
+
+  test('a healthy bridge parent whose subtest fails is not double-counted', () => {
+    const r = runFixture('bridge-parent-subtest-fails.cjs');
+    expect(r.status).toBe(1);
+    expect(r.result).toMatchObject({ tests: 1, failed: 1 });
+  });
+});

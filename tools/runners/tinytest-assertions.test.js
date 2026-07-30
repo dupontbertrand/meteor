@@ -263,6 +263,17 @@ describe('makeTestProxy', () => {
     });
   });
 
+  describe('doesNotThrows', () => {
+    test('passes when fn does not throw', () => {
+      expect(() => proxy.doesNotThrows(() => {})).not.toThrow();
+    });
+
+    test('fails when fn throws', () => {
+      expect(() => proxy.doesNotThrows(() => { throw new Error('boom'); }))
+        .toThrow(/threw an error unexpectedly: boom/);
+    });
+  });
+
   describe('throwsAsync', () => {
     test('undefined expected: resolves when fn rejects', async () => {
       await expect(proxy.throwsAsync(async () => { throw new Error('boom'); })).resolves.not.toThrow();
@@ -300,6 +311,17 @@ describe('makeTestProxy', () => {
     // there) — use a discriminating predicate.
     test('predicate expected: rejects when fn does not reject at all', async () => {
       await expect(proxy.throwsAsync(async () => {}, e => e instanceof TypeError)).rejects.toThrow();
+    });
+  });
+
+  describe('doesNotThrowsAsync', () => {
+    test('resolves when fn does not reject', async () => {
+      await expect(proxy.doesNotThrowsAsync(async () => {})).resolves.not.toThrow();
+    });
+
+    test('rejects when fn rejects', async () => {
+      await expect(proxy.doesNotThrowsAsync(async () => { throw new Error('boom'); }))
+        .rejects.toThrow(/threw an error unexpectedly: boom/);
     });
   });
 

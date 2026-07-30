@@ -165,8 +165,21 @@ state.onEvent = function (event) {
           Math.max(0, Math.round((d.details && d.details.duration_ms) || 0));
       }
       if (isSuite(d)) { state.suites++; break; }  // suites carry details.passed too — exclude
-      if (d.name === SENTINEL_NAME || d.name === BRIDGE_PARENT_NAME) break; // barrier/bridge bookkeeping only — not a real test
-      state.tests++;                              //   them from the pass/fail tally (no double-count)
+      if (d.name === SENTINEL_NAME || d.name === BRIDGE_PARENT_NAME) {
+        // Barrier/bridge bookkeeping — excluded from the test tally. But a
+        // FAILURE of these must never vanish: a bridge parent that throws in
+        // its own body (e.g. tinytest internals drifted) or a user test that
+        // collides with a magic name would otherwise turn into a silent
+        // exit-0 false green. Subtest-caused parent failure is fine (the
+        // subtests were tallied themselves).
+        const err = d.details && d.details.error;
+        if (!(d.details && d.details.passed) &&
+            !(err && err.failureType === 'subtestsFailed')) {
+          state.failed++;
+        }
+        break;
+      }
+      state.tests++;
       if (d.skip) state.skipped++;                // NB: skipped/todo also have details.passed:true,
       else if (d.todo) state.todo++;              //     so skip/todo MUST be checked before passed.
       else if (d.details && d.details.passed) state.passed++;

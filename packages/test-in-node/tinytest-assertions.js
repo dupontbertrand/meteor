@@ -202,6 +202,20 @@ function makeTestProxy() {
       }
     }),
 
+    // Mirrors tinytest.js's doesNotThrows (packages/tinytest/tinytest.js:278):
+    // run f; if it throws, fail with a message naming the thrown error
+    // (plus the caller's failureMessage, if given).
+    doesNotThrows: guarded((f, failureMessage) => {
+      try {
+        f();
+      } catch (e) {
+        assert.fail(
+          `threw an error unexpectedly: ${e.message}` +
+          (failureMessage ? `: ${failureMessage}` : ''),
+        );
+      }
+    }),
+
     throwsAsync: guardedAsync(async (f, expected, message) => {
       if (expected === undefined) {
         await assert.rejects(f, message);
@@ -216,6 +230,19 @@ function makeTestProxy() {
         } catch (e) {
           assert.ok(expected(e), message || `predicate rejected error: ${e.message}`);
         }
+      }
+    }),
+
+    // Mirrors tinytest.js's doesNotThrowsAsync (packages/tinytest/tinytest.js:322)
+    // — same as doesNotThrows above, but awaits f.
+    doesNotThrowsAsync: guardedAsync(async (f, failureMessage) => {
+      try {
+        await f();
+      } catch (e) {
+        assert.fail(
+          `threw an error unexpectedly: ${e.message}` +
+          (failureMessage ? `: ${failureMessage}` : ''),
+        );
       }
     }),
 

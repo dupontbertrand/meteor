@@ -96,8 +96,9 @@ If the package under test still uses `Tinytest.add` / `Tinytest.addAsync`
 (the normal `api.use('tinytest', ...)` `onTest` setup), those suites run
 **unmodified** under this driver — nothing in the tested package changes.
 The driver detects `tinytest` in the test bundle and bridges its registered
-cases into `node:test`, so they get the same parallelism, LPT sharding and
-aggregation as native `node:test` tests:
+cases into `node:test`, so they get the driver's parallelism and
+aggregation, with sharding at case granularity (see below — bridged cases
+don't feed the duration-aware LPT sharding):
 
     meteor test-packages ejson --driver-package test-in-node --once
 
@@ -125,6 +126,15 @@ Limits:
   `TEST_IN_NODE_TIMINGS`, so bridged cases currently don't feed the
   duration-aware sharding described above at all (not even as one lumped
   unit). Per-case LPT for bridged suites is a documented follow-up.
+- **`test.exception()` throws synchronously** — attribution for exceptions
+  raised from a detached callback (outside the case's own call stack)
+  differs from Tinytest's own `onException` routing.
+- **A failing assertion stops the bridged case at that point** — Tinytest
+  records a failure and keeps running the rest of the case; the bridge's
+  assertions throw (via `guarded()`/`guardedAsync()`), so anything after the
+  first failure — including case-local cleanup — is skipped. Outcome-
+  equivalent for pass/fail reporting, but cleanup written after a
+  possibly-failing assertion won't run.
 
 ## Node version note
 
