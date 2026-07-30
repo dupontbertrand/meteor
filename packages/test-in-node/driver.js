@@ -34,6 +34,52 @@ state.rootAfterReached = state.rootAfterReached || false;
 state.finalized = state.finalized || false;
 state.pendingEvents = state.pendingEvents || [];
 
+// ---- Shard filter (Stage 1, parallel workers) -------------------------------
+// The orchestrator assigns this worker a shard {index, total} via TEST_METADATA.
+// node:test's own --test-shard shards by *discovered file* and is silently
+// ignored here (isobuild pre-loads every test file into the bundle; node:test
+// discovers nothing — verified). So we filter at registration time instead:
+// top-level test()/describe() calls are kept round-robin by registration order,
+// which is deterministic because every worker evaluates the same bundle in the
+// same serverJson.load order. A top-level describe is one unit (its nested
+// tests follow it wholesale).
+let shard = null;
+try {
+  const meta = JSON.parse(process.env.TEST_METADATA || '{}');
+  if (meta.shard && meta.shard.total > 1 && meta.shard.index >= 0) shard = meta.shard;
+} catch (err) { /* no/invalid TEST_METADATA (pure Node) — run unsharded */ }
+
+if (shard) {
+  state.shard = { index: shard.index, total: shard.total };
+  const nt = require('node:test');
+  let topLevelSeen = 0;
+  let depth = 0;
+  const wrap = (orig, isSuiteFn) => function (...args) {
+    if (depth === 0 && (topLevelSeen++ % shard.total) !== shard.index) return;
+    if (!isSuiteFn) return orig.apply(this, args);
+    // describe/suite bodies run synchronously at registration: raise depth so
+    // nested registrations are not re-filtered (the unit is the whole suite).
+    const body = args[args.length - 1];
+    if (typeof body === 'function') {
+      args[args.length - 1] = function (...bodyArgs) {
+        depth++;
+        try { return body.apply(this, bodyArgs); } finally { depth--; }
+      };
+    }
+    return orig.apply(this, args);
+  };
+  // test/it (and describe/suite) alias one function but are SEPARATE export
+  // properties — each must be patched, or files importing the alias bypass
+  // the filter entirely.
+  nt.test = wrap(nt.test, false);
+  nt.it = wrap(nt.it, false);
+  nt.describe = wrap(nt.describe, true);
+  nt.suite = wrap(nt.suite, true);
+  // Anti-hang d'un shard vide : couvert par la sentinelle inconditionnelle du
+  // Stage 0 (enregistrée via le binding capturé AVANT ce patch — elle passe
+  // outre le filtre et garantit que la barrière se complète sur chaque shard).
+}
+
 // suite vs test is in data.details.type on test:complete — reliable at every nesting depth.
 function isSuite(d) { return (d && d.details && d.details.type) === 'suite'; }
 
