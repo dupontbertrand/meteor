@@ -82,6 +82,13 @@ describe('runTestWorkers (mocked workers)', () => {
     }));
   });
 
+  afterEach(() => {
+    // Exception-safe: an inline `delete` after the assertions would be
+    // skipped if an expect() throws, leaking the value into process.env for
+    // the rest of the Jest worker (resetModules doesn't reset env vars).
+    delete process.env.METEOR_TEST_WORKER_TIMEOUT_SECS;
+  });
+
   test('no-mongo sentinel skips db work and aggregates a failing worker to exit 1', async () => {
     const { runTestWorkers } = require('./run-test-workers.js');
     const { exitCode, workers } = await runTestWorkers({
@@ -108,7 +115,6 @@ describe('runTestWorkers (mocked workers)', () => {
     });
     expect(exitCode).toBe(255);
     expect(workers[0].signal).toBe('TIMEOUT');
-    delete process.env.METEOR_TEST_WORKER_TIMEOUT_SECS;
   });
 
   test('a worker that exits 0 without a result line yields exit 1', async () => {
@@ -133,6 +139,5 @@ describe('runTestWorkers (mocked workers)', () => {
       testMetadata: {}, nodeOptions: [], workerCount: 1,
     });
     expect(exitCode).toBe(255);
-    delete process.env.METEOR_TEST_WORKER_TIMEOUT_SECS;
   }, 10000);
 });
