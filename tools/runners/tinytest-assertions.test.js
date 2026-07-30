@@ -208,6 +208,34 @@ describe('makeTestProxy', () => {
     test('string: negative notInclude throws', () => {
       expect(() => proxy.notInclude('hello world', 'world')).toThrow();
     });
+
+    // Same eager-JSON.stringify-in-default-message bug as equal() (Stage 2
+    // campaign bug #4): a PASSING array include/notInclude check must not
+    // crash just because the searched-for value is circular.
+    test('array: positive include with a circular value does not throw', () => {
+      const circular = {};
+      circular.self = circular;
+      expect(() => proxy.include([1, circular, 3], circular)).not.toThrow();
+    });
+
+    test('array: positive notInclude with a circular value does not throw', () => {
+      const circular = {};
+      circular.self = circular;
+      expect(() => proxy.notInclude([1, 2, 3], circular)).not.toThrow();
+    });
+
+    test('array: negative include with a circular value fails safely (no JSON.stringify crash)', () => {
+      const circular = {};
+      circular.self = circular;
+      let thrown;
+      try {
+        proxy.include([1, 2, 3], circular);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeDefined();
+      expect(thrown.message).toEqual(expect.stringMatching(/\[unprintable\]|\[object Object\]/));
+    });
   });
 
   describe('length', () => {
@@ -500,5 +528,52 @@ describe('makeTestProxy with a Package.ejson global present', () => {
     };
     const proxy = makeTestProxy();
     expect(() => proxy.notEqual({ a: 1 }, { a: 1 })).not.toThrow();
+  });
+
+  // Stage 2 campaign bug #4: the EJSON branch used to build its default
+  // failure message EAGERLY (as an argument expression to assert.ok), so
+  // JSON.stringify(actual)/JSON.stringify(expected) ran even on a PASSING
+  // assertion. Circular structures made JSON.stringify throw
+  // "Converting circular structure to JSON", turning a passing assertion
+  // into a crash (2 real mongo test cases hit this: `collection - get
+  // collection by name`, `CollectionExtensions - constructor extension`).
+  test('equal on a PASSING circular-reference comparison does not throw (message must be lazy)', () => {
+    global.Package = {
+      ejson: {
+        EJSON: {
+          // Force the EJSON branch; same-reference circular objects are
+          // "equal" by this stand-in comparator.
+          equals: (a, b) => a === b,
+        },
+      },
+    };
+    const proxy = makeTestProxy();
+    const circular = {};
+    circular.self = circular;
+    expect(() => proxy.equal(circular, circular)).not.toThrow();
+  });
+
+  test('equal on a FAILING circular-reference comparison fails safely (no JSON.stringify crash)', () => {
+    global.Package = {
+      ejson: {
+        EJSON: {
+          equals: () => false,
+        },
+      },
+    };
+    const proxy = makeTestProxy();
+    const a = {};
+    a.self = a;
+    const b = {};
+    b.self = b;
+    let thrown;
+    try {
+      proxy.equal(a, b);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeDefined();
+    expect(thrown.name).not.toBe('TypeError');
+    expect(thrown.message).toEqual(expect.stringMatching(/\[unprintable\]|\[object Object\]/));
   });
 });

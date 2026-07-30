@@ -13,6 +13,23 @@ function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Best-effort stringification for default failure messages. JSON.stringify
+// throws on circular structures ("Converting circular structure to JSON");
+// callers must only invoke this once an assertion has actually FAILED (see
+// the guarded()-wrapped methods below) so the cost — and the fallback below
+// — never lands on the passing path.
+function safeShow(v) {
+  try {
+    return JSON.stringify(v);
+  } catch (err) {
+    try {
+      return String(v);
+    } catch (err2) {
+      return '[unprintable]';
+    }
+  }
+}
+
 function makeTestProxy() {
   // Stable per-test-run id, generated ONCE per proxy (== once per bridged
   // Tinytest case). Mirrors real Tinytest's TestCaseResults: `this.id =
@@ -95,7 +112,7 @@ function makeTestProxy() {
       }
       const msg = typeof doc === 'string'
         ? doc
-        : (doc && doc.message) || JSON.stringify(doc);
+        : (doc && doc.message) || safeShow(doc);
       failures.push(msg);
     },
 
@@ -115,10 +132,13 @@ function makeTestProxy() {
       if (typeof actual === 'string' && typeof expected === 'string') {
         assert.strictEqual(actual, expected, message);
       } else if (EJSON) {
-        assert.ok(
-          EJSON.equals(actual, expected),
-          message || `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
-        );
+        // Lazy + safe: only build (and only stringify) the default message
+        // once the assertion has actually failed. Building it eagerly as an
+        // assert.ok() argument ran JSON.stringify on every PASSING call too
+        // — and JSON.stringify throws on circular structures.
+        if (!EJSON.equals(actual, expected)) {
+          assert.fail(message || `expected ${safeShow(expected)}, got ${safeShow(actual)}`);
+        }
       } else {
         assert.deepStrictEqual(actual, expected, message);
       }
@@ -192,7 +212,11 @@ function makeTestProxy() {
           try { assert.deepStrictEqual(item, v); return true; }
           catch { return false; }
         });
-        assert.ok(found, message || `expected array to include ${JSON.stringify(v)}`);
+        // Lazy + safe: don't stringify v (possibly circular) unless the
+        // assertion is actually about to fail.
+        if (!found) {
+          assert.fail(message || `expected array to include ${safeShow(v)}`);
+        }
       } else if (s && typeof s === 'object') {
         assert.ok(v in s, message || `expected object to have key "${v}"`);
       } else if (typeof s === 'string') {
@@ -208,7 +232,10 @@ function makeTestProxy() {
           try { assert.deepStrictEqual(item, v); return true; }
           catch { return false; }
         });
-        assert.ok(!found, message || `expected array not to include ${JSON.stringify(v)}`);
+        // Lazy + safe — see include() above.
+        if (found) {
+          assert.fail(message || `expected array not to include ${safeShow(v)}`);
+        }
       } else if (s && typeof s === 'object') {
         assert.ok(!(v in s), message || `expected object not to have key "${v}"`);
       } else if (typeof s === 'string') {
