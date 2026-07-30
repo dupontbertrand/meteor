@@ -16,7 +16,9 @@ function runFixture(name, extraEnv = {}) {
     },
   );
   const m = res.stdout.match(/^TEST_IN_NODE_RESULT (.*)$/m);
-  return { status: res.status, stdout: res.stdout, result: m ? JSON.parse(m[1]) : null };
+  const t = res.stdout.match(/^TEST_IN_NODE_TIMINGS (.*)$/m);
+  return { status: res.status, stdout: res.stdout, result: m ? JSON.parse(m[1]) : null,
+           timings: t ? JSON.parse(t[1]) : null };
 }
 
 describe('test-in-node driver contract', () => {
@@ -128,5 +130,22 @@ describe('name filter', () => {
     const r = runFixture('keepalive-tests.cjs', { TINYTEST_FILTER: '(' });
     expect(r.status).toBe(0); // does not crash; '(' matches nothing → sentinel → 0 tests
     expect(r.result).toMatchObject({ tests: 0 });
+  });
+});
+
+describe('unit timings', () => {
+  test('emits per-top-level-unit timings, sentinel excluded', () => {
+    const r = runFixture('keepalive-tests.cjs');
+    expect(r.status).toBe(0);
+    expect(Object.keys(r.timings).sort()).toEqual(['suite-a', 't0', 't1', 't2']);
+    for (const v of Object.values(r.timings)) {
+      expect(Number.isInteger(v)).toBe(true);
+      expect(v).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  test('sharded workers emit timings for their own units only', () => {
+    const r = runFixture('keepalive-tests.cjs', shardEnv(0, 2)); // t0 + t2
+    expect(Object.keys(r.timings).sort()).toEqual(['t0', 't2']);
   });
 });

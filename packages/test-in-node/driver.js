@@ -33,6 +33,7 @@ state.todo = state.todo || 0;
 state.rootAfterReached = state.rootAfterReached || false;
 state.finalized = state.finalized || false;
 state.pendingEvents = state.pendingEvents || [];
+state.unitTimings = state.unitTimings || {};
 
 // ---- Registration filter: shard + name (Stage 1, parallel workers) ---------
 // The orchestrator assigns this worker a shard {index, total} via TEST_METADATA.
@@ -116,6 +117,10 @@ state.onEvent = function (event) {
       break;
     case 'test:complete':              // terminal for EVERY outcome → completed never stalls
       state.completed++;
+      if (d.nesting === 0 && d.name !== SENTINEL_NAME) {
+        state.unitTimings[d.name] =
+          Math.max(0, Math.round((d.details && d.details.duration_ms) || 0));
+      }
       if (isSuite(d)) { state.suites++; break; }  // suites carry details.passed too — exclude
       if (d.name === SENTINEL_NAME) break;        // barrier bookkeeping only — not a real test
       state.tests++;                              //   them from the pass/fail tally (no double-count)
@@ -166,7 +171,8 @@ function maybeFinalize() {
     `\n${c.bold('test-in-node')} ${c.gray('· node:test')}\n  ` +
     (parts.join(', ') || c.gray('no assertions')) +
     c.gray(` (${state.tests} tests)`) + '\n' +
-    `TEST_IN_NODE_RESULT ${JSON.stringify(machine)}\n\n`,
+    `TEST_IN_NODE_RESULT ${JSON.stringify(machine)}\n` +
+    `TEST_IN_NODE_TIMINGS ${JSON.stringify(state.unitTimings)}\n\n`,
     () => process.exit(state.failed > 0 ? 1 : 0),
   );
 }
