@@ -113,9 +113,20 @@ function runCase(c) {
     if (r && typeof r.then === 'function') {
       r.then(resolve, reject);
     }
-  }).then(() => {
-    if (proxy._failures.length) {
-      throw new Error('tinytest recorded failures: ' + proxy._failures.join('; '));
-    }
-  });
+  }).then(
+    () => {
+      if (proxy._failures.length) {
+        throw new Error('tinytest recorded failures: ' + proxy._failures.join('; '));
+      }
+    },
+    (err) => {
+      // The case rejected on its own — don't lose fail() messages recorded
+      // before the rejection.
+      if (proxy._failures.length && err && typeof err.message === 'string') {
+        err.message +=
+          ' (also recorded: ' + proxy._failures.join('; ') + ')';
+      }
+      throw err;
+    },
+  );
 }
