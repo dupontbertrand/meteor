@@ -134,11 +134,18 @@ describe('name filter', () => {
 });
 
 describe('unit timings', () => {
-  test('emits per-top-level-unit timings, sentinel excluded', () => {
+  test('sequential runs do not emit timings', () => {
     const r = runFixture('keepalive-tests.cjs');
     expect(r.status).toBe(0);
-    expect(Object.keys(r.timings).sort()).toEqual(['suite-a', 't0', 't1', 't2']);
-    for (const v of Object.values(r.timings)) {
+    expect(r.timings).toBeNull();
+  });
+
+  test('sharded runs emit per-top-level-unit timings, sentinel excluded (union across shards)', () => {
+    const w0 = runFixture('keepalive-tests.cjs', shardEnv(0, 2)); // t0 + t2
+    const w1 = runFixture('keepalive-tests.cjs', shardEnv(1, 2)); // t1 + suite-a
+    const merged = { ...w0.timings, ...w1.timings };
+    expect(Object.keys(merged).sort()).toEqual(['suite-a', 't0', 't1', 't2']);
+    for (const v of Object.values(merged)) {
       expect(Number.isInteger(v)).toBe(true);
       expect(v).toBeGreaterThanOrEqual(0);
     }
@@ -167,11 +174,11 @@ describe('duration-aware sharding (LPT)', () => {
   });
 
   test('unknown units fall back to round-robin without disturbing LPT picks', () => {
-    const partial = { 't0': 1000, 'suite-a': 900 };           // t1, t2 inconnues
+    const partial = { 't0': 1000, 'suite-a': 900 };           // t1, t2 unknown to the timings map
     const env = (i) => ({ TEST_METADATA: JSON.stringify({ shard: { index: i, total: 2 }, timings: partial }) });
     const w0 = runFixture('keepalive-tests.cjs', env(0));
     const w1 = runFixture('keepalive-tests.cjs', env(1));
-    // LPT: t0→b0, suite-a→b1 ; inconnues t1,t2 en round-robin: t1→b0, t2→b1
+    // LPT: t0→b0, suite-a→b1; unknowns t1, t2 round-robin: t1→b0, t2→b1
     expect(w0.result).toMatchObject({ tests: 2 });            // t0 + t1
     expect(w1.result).toMatchObject({ tests: 3 });            // suite-a(2) + t2
   });

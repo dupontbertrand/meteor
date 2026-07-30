@@ -88,6 +88,7 @@ describe('runTestWorkers (mocked workers)', () => {
       pathJoin: (...args) => args.join('/'),
       readFile: jest.fn(() => { throw new Error('ENOENT'); }),
       writeFile: jest.fn(),
+      writeFileAtomically: jest.fn(),
     }));
     jest.doMock('../tool-env/isopackets.js', () => ({
       loadIsopackage: jest.fn(() => { loadIsopackageCalls++; throw new Error('should not be called for no-mongo'); }),
@@ -111,6 +112,7 @@ describe('runTestWorkers (mocked workers)', () => {
     // the rest of the Jest worker (resetModules doesn't reset env vars).
     delete process.env.METEOR_TEST_WORKER_TIMEOUT_SECS;
     delete process.env.METEOR_TEST_MONGO_PER_WORKER;
+    delete process.env.TINYTEST_FILTER;
   });
 
   test('no-mongo sentinel skips db work and aggregates a failing worker to exit 1', async () => {
@@ -219,7 +221,7 @@ describe('runTestWorkers (mocked workers)', () => {
       bundlePath: '/x', mongoUrl: 'no-mongo-server', rootUrl: 'http://localhost/',
       listenHost: undefined, settings: null, testMetadata: {}, nodeOptions: [], workerCount: 2,
     });
-    expect(files.writeFile).toHaveBeenCalledWith(
+    expect(files.writeFileAtomically).toHaveBeenCalledWith(
       '/fake/local/test-in-node-timings.json',
       JSON.stringify({ version: 1, timings: { u0: 100, u1: 101 } }),
     );
@@ -236,5 +238,58 @@ describe('runTestWorkers (mocked workers)', () => {
     });
     expect(spawnedOptions[0].testMetadata.timings).toEqual({ a: 5 });
     expect(spawnedOptions[1].testMetadata.timings).toEqual({ a: 5 });
+  });
+
+  test('TINYTEST_FILTER skips both timings injection and persistence', async () => {
+    process.env.TINYTEST_FILTER = 'x';
+    const files = require('../fs/files');
+    files.readFile.mockImplementation(() => JSON.stringify({ version: 1, timings: { a: 5 } }));
+    mockBehavior = async (options) => {
+      const i = options.testMetadata.shard.index;
+      await options.onOutput(`TEST_IN_NODE_RESULT {"tests":1,"passed":1,"failed":0,"skipped":0,"todo":0}`, false);
+      await options.onOutput(`TEST_IN_NODE_TIMINGS {"u${i}":${100 + i}}`, false);
+      options.onExit(0, null);
+    };
+    const { runTestWorkers } = require('./run-test-workers.js');
+    await runTestWorkers({
+      projectContext: { projectLocalDir: '/fake/local', getProjectLocalDirectory: (s) => `/fake/local/${s}` },
+      bundlePath: '/x', mongoUrl: 'no-mongo-server', rootUrl: 'http://localhost/',
+      listenHost: undefined, settings: null, testMetadata: {}, nodeOptions: [], workerCount: 2,
+    });
+    expect(spawnedOptions[0].testMetadata.timings).toBeUndefined();
+    expect(files.writeFile).not.toHaveBeenCalled();
+    expect(files.writeFileAtomically).not.toHaveBeenCalled();
+  });
+
+  test('an oversized saved-timings map falls back to round-robin (50KB guard)', async () => {
+    const files = require('../fs/files');
+    const oversized = { [`${'k'.repeat(60000)}`]: 1 }; // JSON.stringify > 50000 chars
+    files.readFile.mockImplementation(() => JSON.stringify({ version: 1, timings: oversized }));
+    const runLog = require('./run-log.js');
+    const { runTestWorkers } = require('./run-test-workers.js');
+    await runTestWorkers({
+      projectContext: { projectLocalDir: '/fake/local', getProjectLocalDirectory: (s) => `/fake/local/${s}` },
+      bundlePath: '/x', mongoUrl: 'no-mongo-server', rootUrl: 'http://localhost/',
+      listenHost: undefined, settings: null, testMetadata: {}, nodeOptions: [], workerCount: 2,
+    });
+    expect(spawnedOptions[0].testMetadata.timings).toBeUndefined();
+    expect(runLog.log).toHaveBeenCalledWith(expect.stringContaining('too large'));
+  });
+
+  test('a corrupt timings state file is treated as absent (round-robin fallback)', async () => {
+    const files = require('../fs/files');
+    files.readFile.mockImplementation(() => '{corrupt');
+    mockBehavior = async (options) => {
+      await options.onOutput(`TEST_IN_NODE_RESULT {"tests":1,"passed":1,"failed":0,"skipped":0,"todo":0}`, false);
+      options.onExit(0, null);
+    };
+    const { runTestWorkers } = require('./run-test-workers.js');
+    const { exitCode } = await runTestWorkers({
+      projectContext: { projectLocalDir: '/fake/local', getProjectLocalDirectory: (s) => `/fake/local/${s}` },
+      bundlePath: '/x', mongoUrl: 'no-mongo-server', rootUrl: 'http://localhost/',
+      listenHost: undefined, settings: null, testMetadata: {}, nodeOptions: [], workerCount: 2,
+    });
+    expect(exitCode).toBe(0);
+    expect(spawnedOptions[0].testMetadata.timings).toBeUndefined();
   });
 });

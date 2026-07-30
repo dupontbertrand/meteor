@@ -97,13 +97,19 @@ async function runTestWorkers(options) {
   // missing/corrupt/foreign-shaped file is treated as absent — round-robin
   // sharding is always a safe fallback, never a hard failure.
   const timingsStatePath = files.pathJoin(projectContext.projectLocalDir, TIMINGS_STATE_FILENAME);
+  const filterActive = !!process.env.TINYTEST_FILTER;
   let savedTimings = null;
-  try {
-    const parsed = JSON.parse(files.readFile(timingsStatePath, 'utf8'));
-    if (parsed && parsed.version === 1 && parsed.timings && typeof parsed.timings === 'object') {
-      savedTimings = parsed.timings;
-    }
-  } catch (err) { /* no state file yet, or unreadable/invalid — round-robin fallback */ }
+  // --filter runs see (and would persist) only a subset of units: injecting full-map timings would
+  // concentrate the survivors onto one bucket, and persisting the subset would clobber the full-suite
+  // map. Skip both.
+  if (!filterActive) {
+    try {
+      const parsed = JSON.parse(files.readFile(timingsStatePath, 'utf8'));
+      if (parsed && parsed.version === 1 && parsed.timings && typeof parsed.timings === 'object') {
+        savedTimings = parsed.timings;
+      }
+    } catch (err) { /* no state file yet, or unreadable/invalid — round-robin fallback */ }
+  }
 
   // Bound the payload re-injected into every worker's TEST_METADATA env var:
   // an unbounded timings map would grow with the suite forever and eventually
@@ -203,9 +209,9 @@ async function runTestWorkers(options) {
     // Persist this run's merged timings for the next parallel run's LPT
     // sharding. Best-effort: a write failure here must never fail the test
     // run itself — it only means the next run falls back to round-robin.
-    if (Object.keys(collectedTimings).length > 0) {
+    if (!filterActive && Object.keys(collectedTimings).length > 0) {
       try {
-        files.writeFile(timingsStatePath, JSON.stringify({ version: 1, timings: collectedTimings }));
+        await files.writeFileAtomically(timingsStatePath, JSON.stringify({ version: 1, timings: collectedTimings }));
       } catch (err) {
         runLog.log(`test-in-node: could not persist timings (${err.message}) — next run will use round-robin sharding.`);
       }

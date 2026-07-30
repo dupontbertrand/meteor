@@ -194,12 +194,19 @@ function maybeFinalize() {
     skipped: state.skipped, todo: state.todo,
   };
   if (state.shard) machine.shard = state.shard;
+  // Sharded (parallel-worker) runs are the only consumer of the timings line
+  // (run-test-workers.js collects it for the next run's LPT sharding) — a
+  // plain sequential run has no one to read it, so skip printing an
+  // unconsumed, potentially multi-KB line on every local `meteor test`.
+  const timingsLine = state.shard
+    ? `TEST_IN_NODE_TIMINGS ${JSON.stringify(state.unitTimings)}\n`
+    : '';
   process.stdout.write(
     `\n${c.bold('test-in-node')} ${c.gray('· node:test')}\n  ` +
     (parts.join(', ') || c.gray('no assertions')) +
     c.gray(` (${state.tests} tests)`) + '\n' +
     `TEST_IN_NODE_RESULT ${JSON.stringify(machine)}\n` +
-    `TEST_IN_NODE_TIMINGS ${JSON.stringify(state.unitTimings)}\n\n`,
+    timingsLine + '\n',
     () => process.exit(state.failed > 0 ? 1 : 0),
   );
 }
