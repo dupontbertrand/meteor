@@ -42,6 +42,22 @@ Standard `node:test`: `describe`/`it`, `node:assert/strict`, async tests, `it.sk
 `it.todo`, nested suites — all from Node core, zero extra dependencies. The runner
 reports a compact pass/fail/skip/todo summary and exits non-zero if any test fails.
 
+## Parallel workers (experimental)
+
+Build once, run the suite across N isolated worker processes — each with its
+own port and its own Mongo database (`meteor_w<i>` on the shared dev mongod):
+
+    meteor test-packages my-package --driver-package test-in-node --once --parallel-workers 4
+
+- Sharding is assigned round-robin over **top-level** `test()`/`describe()`
+  registrations (a top-level `describe` moves wholesale with its nested tests).
+  `node:test`'s own `--test-shard` does not apply here: test files are
+  pre-loaded by the Meteor bundle, so the runner never discovers files.
+- Requires `--once` (no watch/rebuild while workers run). The exit code is 0
+  only if every worker passed.
+- Worker databases are dropped before each run. Set
+  `METEOR_TEST_WORKER_TIMEOUT_SECS` (default 900) to bound a hung worker.
+
 ## Node version note
 
 The driver relies on `node:test`'s `test:complete` event (Node ≥ 20.13). Inside
