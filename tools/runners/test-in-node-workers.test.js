@@ -189,3 +189,14 @@ describe('duration-aware sharding (LPT)', () => {
     expect(r.result).toMatchObject({ tests: 5, passed: 5 });
   });
 });
+
+describe('rawTest bypass', () => {
+  test('rawTest registrations bypass sharding and filtering', () => {
+    const w0 = runFixture('raw-test.cjs', shardEnv(0, 2)); // rr units: t0→w0 ⇒ {bypass, t0}
+    const w1 = runFixture('raw-test.cjs', shardEnv(1, 2)); // t1→w1 ⇒ {bypass, t1}
+    expect(w0.result).toMatchObject({ tests: 2, passed: 2 });
+    expect(w1.result).toMatchObject({ tests: 2, passed: 2 });
+    const f = runFixture('raw-test.cjs', { TINYTEST_FILTER: 't0' }); // filter keeps t0; bypass ignores it
+    expect(f.result).toMatchObject({ tests: 2, passed: 2 });
+  });
+});

@@ -34,6 +34,9 @@ state.rootAfterReached = state.rootAfterReached || false;
 state.finalized = state.finalized || false;
 state.pendingEvents = state.pendingEvents || [];
 state.unitTimings = state.unitTimings || {};
+// Reserved for integrations (the Tinytest bridge) that manage their own sharding/filtering
+// and must bypass the registration wrap.
+state.rawTest = state.rawTest || test;
 
 // ---- Registration filter: shard + name (Stage 1, parallel workers) ---------
 // The orchestrator assigns this worker a shard {index, total} via TEST_METADATA.
