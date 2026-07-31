@@ -136,7 +136,14 @@ function makeTestProxy() {
         // once the assertion has actually failed. Building it eagerly as an
         // assert.ok() argument ran JSON.stringify on every PASSING call too
         // — and JSON.stringify throws on circular structures.
-        if (!EJSON.equals(actual, expected)) {
+        //
+        // Argument order matters: EJSON.equals(a, b) is order-dependent (a's
+        // .equals() method wins if present, packages/ejson/ejson.js), so this
+        // must mirror real Tinytest's expected-first order exactly
+        // (packages/tinytest/tinytest.js:149) or asymmetric .equals()
+        // implementations (e.g. MongoID.ObjectID vs bson.ObjectId) can flip
+        // the result. See objectid-investigation-report.md.
+        if (!EJSON.equals(expected, actual)) {
           assert.fail(message || `expected ${safeShow(expected)}, got ${safeShow(actual)}`);
         }
       } else {
@@ -149,8 +156,9 @@ function makeTestProxy() {
       if (typeof actual === 'string' && typeof expected === 'string') {
         assert.notStrictEqual(actual, expected, message);
       } else if (EJSON) {
+        // Mirrors equal()'s expected-first order — see the comment there.
         assert.ok(
-          !EJSON.equals(actual, expected),
+          !EJSON.equals(expected, actual),
           message || `expected values to differ`,
         );
       } else {

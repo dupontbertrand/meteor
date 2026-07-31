@@ -515,7 +515,9 @@ describe('makeTestProxy with a Package.ejson global present', () => {
     };
     const proxy = makeTestProxy();
     expect(() => proxy.equal({ a: 1 }, { totally: 'different' })).not.toThrow();
-    expect(calledWith).toEqual([{ a: 1 }, { totally: 'different' }]);
+    // expected-first, mirroring real Tinytest (packages/tinytest/tinytest.js:149)
+    // and the dedicated order test below.
+    expect(calledWith).toEqual([{ totally: 'different' }, { a: 1 }]);
   });
 
   test('notEqual uses EJSON.equals when available', () => {
@@ -575,5 +577,51 @@ describe('makeTestProxy with a Package.ejson global present', () => {
     expect(thrown).toBeDefined();
     expect(thrown.name).not.toBe('TypeError');
     expect(thrown.message).toEqual(expect.stringMatching(/\[unprintable\]|\[object Object\]/));
+  });
+});
+
+describe('EJSON.equals argument order matches real Tinytest', () => {
+  // Real Tinytest calls EJSON.equals(expected, actual) — expected FIRST
+  // (packages/tinytest/tinytest.js:149). EJSON.equals is order-dependent by
+  // design: `a`'s .equals() method wins if present (packages/ejson/ejson.js),
+  // so passing (actual, expected) instead of (expected, actual) can silently
+  // flip the result for asymmetric .equals() implementations (e.g.
+  // MongoID.ObjectID vs bson.ObjectId — see objectid-investigation-report.md).
+  // This fake pins the point without needing real EJSON/bson: `equals(x, y)`
+  // only returns true when the object with `wins: true` is passed FIRST.
+  const orderSensitiveEquals = (x, y) => !!(x && x.wins);
+
+  test('equal: an "expected" object with .wins passes only when EJSON.equals sees it first', () => {
+    const originalPackage = global.Package;
+    global.Package = { ejson: { EJSON: { equals: orderSensitiveEquals } } };
+    try {
+      const proxy = makeTestProxy();
+      const actual = { plain: true };
+      const expected = { wins: true };
+      // Correct order is EJSON.equals(expected, actual) -> expected.wins is
+      // truthy -> true -> equal() must NOT throw. Under the old, swapped
+      // order (actual, expected), actual.wins is undefined -> false -> this
+      // would throw instead.
+      expect(() => proxy.equal(actual, expected)).not.toThrow();
+    } finally {
+      global.Package = originalPackage;
+    }
+  });
+
+  test('notEqual: mirrors the same (expected, actual) order', () => {
+    const originalPackage = global.Package;
+    global.Package = { ejson: { EJSON: { equals: orderSensitiveEquals } } };
+    try {
+      const proxy = makeTestProxy();
+      const actual = { plain: true };
+      const expected = { wins: true };
+      // Correct order treats these as equal (expected.wins wins), so
+      // notEqual() must throw. Under the old, swapped order the comparator
+      // would see actual.wins (undefined) first, report "not equal", and
+      // notEqual() would wrongly pass instead.
+      expect(() => proxy.notEqual(actual, expected)).toThrow();
+    } finally {
+      global.Package = originalPackage;
+    }
   });
 });
