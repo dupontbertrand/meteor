@@ -53,7 +53,7 @@ async function dropWorkerDatabases(baseUrl, count) {
 
 async function runTestWorkers(options) {
   const {
-    projectContext, bundlePath, mongoUrl, rootUrl, listenHost,
+    projectContext, bundlePath, mongoUrl, listenHost,
     settings, testMetadata, nodeOptions, workerCount,
   } = options;
 
@@ -144,7 +144,11 @@ async function runTestWorkers(options) {
         bundlePath,
         port: basePort + i,
         listenHost,
-        rootUrl,
+        // Workers listen on their own ports without the proxy in front of
+        // them; self-connecting tests (DDP.connect(Meteor.absoluteUrl()))
+        // must reach their own server — the shared proxy rootUrl would
+        // point at a port no worker actually serves in parallel mode.
+        rootUrl: `http://${listenHost || 'localhost'}:${basePort + i}/`,
         mongoUrl: mongoPerWorker
           ? workerMongoRunners[i].mongoUrl()
           : (hasMongo ? workerMongoUrl(mongoUrl, i) : mongoUrl),

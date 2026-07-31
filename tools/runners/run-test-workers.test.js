@@ -130,6 +130,18 @@ describe('runTestWorkers (mocked workers)', () => {
     expect(workers[1].code).toBe(1);
   });
 
+  test('each worker gets its own rootUrl pointing at its own port, not the shared proxy', async () => {
+    const { runTestWorkers } = require('./run-test-workers.js');
+    await runTestWorkers({
+      projectContext: {}, bundlePath: '/x', mongoUrl: 'no-mongo-server',
+      rootUrl: 'http://localhost/', listenHost: undefined, settings: null,
+      testMetadata: { driverPackage: 'test-in-node' }, nodeOptions: [], workerCount: 2,
+    });
+    expect(spawnedOptions[0].rootUrl).not.toBe(spawnedOptions[1].rootUrl);
+    expect(spawnedOptions[0].rootUrl.endsWith(`:${spawnedOptions[0].port}/`)).toBe(true);
+    expect(spawnedOptions[1].rootUrl.endsWith(`:${spawnedOptions[1].port}/`)).toBe(true);
+  });
+
   test('a worker that never exits is timed out to 255', async () => {
     process.env.METEOR_TEST_WORKER_TIMEOUT_SECS = '0.05'; // 50ms, module reloaded per resetModules
     mockBehavior = async () => { /* spawn "succeeds" but nothing ever happens: no result, no onExit */ };
