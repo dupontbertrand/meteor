@@ -3,9 +3,11 @@
 const { test, mock } = require('node:test');
 const assert = require('node:assert');
 const relabel = require('../relabel.js');
-const { MERGES, readManifest, isUntriaged } = relabel;
+const { MANIFEST, MERGES, NEEDS_TRIAGE, LEGACY_REVIEW, readManifest, isUntriaged } = relabel;
 const fs = require('fs');
-const path = require('path');
+
+const manifestText = fs.readFileSync(MANIFEST, 'utf8');
+const manifest = readManifest(manifestText);
 
 const OLD = '2023-05-02T10:00:00Z';
 const NEW = '2027-03-10T10:00:00Z';
@@ -92,6 +94,8 @@ test('never adds it back once a triager removed it', async () => {
       ],
     }),
     issue(2, OLD, ['status: confirmed'], { events: [{ event: 'labeled', label: { name: 'type: bug' } }] }),
+    // Closed as `legacy: pre-3 only`, then reopened without it.
+    issue(3, OLD, ['status: confirmed'], { events: [{ event: 'labeled', label: { name: 'legacy: pre-3 only' } }] }),
   ]);
   await run(github);
   assert.deepStrictEqual(github.added, ['#2 legacy: needs-review']);
@@ -105,7 +109,7 @@ test('an untriaged old issue gets both labels', async () => {
 
 test('merges into the new label, keeps every other label, closed items included', { timeout: 10000 }, async () => {
   const github = buildGithubMock([
-    issue(1, NEW, ['status: confirmed', 'bug', 'Project:DDP', 'good first issue'], { closed: true }),
+    issue(1, NEW, ['status: confirmed', 'bug', 'area: ddp', 'good first issue'], { closed: true }),
     issue(2, NEW, ['status: confirmed', 'bug', 'type: bug']),
     issue(3, NEW, ['status: confirmed', 'Project:CSS', 'Project:HMR']),
   ]);
@@ -122,17 +126,23 @@ const T0 = 1_700_000_000_000;
 async function runOnMockedClock(github, runTime) {
   mock.timers.enable({ apis: ['setTimeout', 'Date'], now: T0 });
   try {
-    let result;
-    let done = false;
-    run(github, false, runTime).then((left) => {
-      result = left;
-      done = true;
-    });
-    while (!done) {
+    let outcome;
+    run(github, false, runTime).then(
+      (left) => {
+        outcome = { left };
+      },
+      (error) => {
+        outcome = { error };
+      }
+    );
+    // The longest run takes about 400 turns; one that never settles must fail, not spin.
+    for (let turns = 0; !outcome; turns++) {
+      assert.ok(turns < 10_000, 'the run never settled');
       await new Promise((resolve) => setImmediate(resolve));
       mock.timers.runAll();
     }
-    return result;
+    if (outcome.error) throw outcome.error;
+    return outcome.left;
   } finally {
     mock.timers.reset();
   }
@@ -177,23 +187,59 @@ test('a budget of exactly the reserve does not wait', { timeout: 10000 }, async 
   assert.strictEqual(await run(github, false, 60 * 1000), 0);
 });
 
-test('waits out a secondary rate limit and writes again', async () => {
-  const github = buildGithubMock([issue(1, NEW, ['status: confirmed', 'bug'])]);
+// Answers the first `failures` writes with a rate limit; returns the time of every attempt.
+function limitWrites(github, failures, headers = {}, status = 403) {
   const times = [];
   const addLabels = github.rest.issues.addLabels;
   github.rest.issues.addLabels = async (params) => {
     times.push(Date.now());
-    if (times.length === 1) {
-      throw Object.assign(new Error('You have exceeded a secondary rate limit'), {
-        status: 403,
-        response: { headers: { 'retry-after': '120' } },
-      });
+    if (times.length <= failures) {
+      throw Object.assign(new Error('You have exceeded a secondary rate limit'), { status, response: { headers } });
     }
     return addLabels(params);
   };
+  return times;
+}
+
+test('waits out a secondary rate limit and writes again', async () => {
+  const github = buildGithubMock([issue(1, NEW, ['status: confirmed', 'bug'])]);
+  const times = limitWrites(github, 1, { 'retry-after': '120' });
   assert.strictEqual(await runOnMockedClock(github), 0);
   assert.deepStrictEqual(times, [T0, T0 + 120_000]);
   assert.deepStrictEqual(github.added, ['#1 type: bug']);
+});
+
+test('waits a minute when the rate limit comes without a delay', async () => {
+  const github = buildGithubMock([issue(1, NEW, ['status: confirmed', 'bug'])]);
+  const times = limitWrites(github, 1, {}, 429);
+  assert.strictEqual(await runOnMockedClock(github), 0);
+  assert.deepStrictEqual(times, [T0, T0 + 60_000]);
+});
+
+test('waits for the hourly budget when a write finds it spent', async () => {
+  const github = buildGithubMock([issue(1, NEW, ['status: confirmed', 'bug'])]);
+  const reset = (T0 + 30 * 60_000) / 1000;
+  const times = limitWrites(github, 1, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) });
+  assert.strictEqual(await runOnMockedClock(github), 0);
+  assert.deepStrictEqual(times, [T0, T0 + 30 * 60_000]);
+});
+
+test('fails after three rate limited answers in a row', async () => {
+  const github = buildGithubMock([issue(1, NEW, ['status: confirmed', 'bug'])]);
+  const times = limitWrites(github, 3, { 'retry-after': '120' });
+  await assert.rejects(runOnMockedClock(github), /secondary rate limit/);
+  assert.strictEqual(times.length, 3);
+});
+
+test('stops when the rate limit asks for a wait longer than the run', async () => {
+  const github = buildGithubMock([
+    issue(1, NEW, ['status: confirmed', 'bug']),
+    issue(2, NEW, ['status: confirmed', 'enhancement']),
+  ]);
+  const times = limitWrites(github, 1, { 'retry-after': String(6 * 60 * 60) });
+  assert.strictEqual(await runOnMockedClock(github), 1);
+  assert.strictEqual(times.length, 1);
+  assert.deepStrictEqual(github.added, []);
 });
 
 test('fails on an error other than a rate limit', async () => {
@@ -253,6 +299,17 @@ test('counts an item once when several old labels merge into the same new one', 
   assert.strictEqual(await run(github, true), 1);
 });
 
+test('gives the new label to the items of an old label the sync could not rename', { timeout: 10000 }, async () => {
+  // `status: stale` already existed, so the sync left `idle` in place.
+  const github = buildGithubMock([
+    issue(1, NEW, ['status: confirmed', 'idle']),
+    issue(2, NEW, ['status: confirmed', 'idle', 'status: stale']),
+    issue(3, NEW, ['idle'], { closed: true }),
+  ]);
+  assert.strictEqual(await run(github), 0);
+  assert.deepStrictEqual(github.added, ['#1 status: stale', '#3 status: stale']);
+});
+
 test('the dry run reads the labels as renamed, so a rename already gives the new label', async () => {
   // `Type:Bug` is renamed to `type: bug`: merging `bug` into it adds nothing.
   const github = buildGithubMock([issue(1, NEW, ['status: confirmed', 'Type:Bug', 'bug'])]);
@@ -260,7 +317,6 @@ test('the dry run reads the labels as renamed, so a rename already gives the new
 });
 
 test('every old or new status counts as triage, except stale', () => {
-  const manifest = readManifest(fs.readFileSync(path.join(__dirname, '../../labels.yml'), 'utf8'));
   const statuses = [...manifest.renames, ...Object.entries(MERGES)]
     .filter(([, to]) => to.startsWith('status: ') && to !== 'status: stale')
     .map(([from]) => from);
@@ -268,4 +324,20 @@ test('every old or new status counts as triage, except stale', () => {
     assert.strictEqual(isUntriaged(issue(1, NEW, [name])), false, name);
   }
   assert.strictEqual(isUntriaged(issue(1, NEW, ['status: stale'])), true);
+});
+
+test('every label the script adds is in the manifest, and every merged label is out of it', () => {
+  for (const [oldLabel, newLabel] of Object.entries(MERGES)) {
+    assert.ok(manifest.names.has(newLabel), newLabel);
+    assert.ok(!manifest.names.has(oldLabel) && !manifest.renames.has(oldLabel), oldLabel);
+  }
+  assert.ok(manifest.names.has(NEEDS_TRIAGE));
+  assert.ok(manifest.names.has(LEGACY_REVIEW));
+});
+
+test('the manifest keeps the one quoted key per line that the scripts read', () => {
+  for (const line of manifestText.split('\n')) {
+    if (line === '' || line.startsWith('#')) continue;
+    assert.match(line, /^(- name|  (color|description|from_name)): "[^"]*"$/);
+  }
 });
