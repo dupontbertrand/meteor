@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 
 const OLD = '2023-05-02T10:00:00Z';
-const NEW = '2025-03-10T10:00:00Z';
+const NEW = '2027-03-10T10:00:00Z';
 
 const issue = (number, createdAt, labels = [], extra = {}) => ({
   number,

@@ -11,7 +11,7 @@ const manifest = readManifest(fs.readFileSync(path.join(__dirname, '../../labels
 const item = (number, labels, extra = {}) => ({
   number,
   state: 'closed',
-  created_at: '2025-03-10T10:00:00Z',
+  created_at: '2027-03-10T10:00:00Z',
   title: `Item ${number}`,
   labels: labels.map((name) => ({ name })),
   ...extra,

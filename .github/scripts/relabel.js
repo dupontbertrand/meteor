@@ -68,8 +68,8 @@ const STALE = 'status: stale';
 const OLD_STATUSES = ['triage', 'needs-reproduction', 'not-ready', 'waiting-feedback', 'confirmed',
   'needs-investigation', 'in-discussion', 'ready', 'in-development', 'pending-tests'];
 const LEGACY_REVIEW = 'legacy: needs-review';
-// Meteor 3.0 shipped on July 15, 2024.
-const METEOR_3 = '2024-07-15';
+// Rehearsal: the mock issues created before this time stand for the ones from before 3.0.
+const METEOR_3 = '2026-11-18T15:33:39Z';
 // Feature labels before and after the migration: a feature request is not tied to a release.
 const FEATURES = ['type: feature', 'Type:Feature', 'enhancement'];
 // Requests kept in reserve for the other workflows sharing the token budget.

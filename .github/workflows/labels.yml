@@ -21,6 +21,7 @@ on:
   push:
     branches:
       - devel
+      - rehearsal/labels-as-code
     paths:
       - '.github/labels.yml'
       - '.github/scripts/relabel.js'
