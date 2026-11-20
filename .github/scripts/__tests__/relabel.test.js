@@ -321,6 +321,15 @@ test('fails when a read is rate limited for longer than the run', async () => {
   limitReads(history, history.rest.issues.listEvents, 1, { 'retry-after': String(6 * 60 * 60) });
   await assert.rejects(runOnMockedClock(history), /longer than this run/);
   assert.deepStrictEqual(history.added, []);
+
+  // Labels that cannot be read must not read as "the migration is over".
+  const unread = buildGithubMock([
+    issue(14586, NEW, ['Project:NPM'], { pull_request: {} }),
+    issue(1, NEW, ['bug'], { closed: true }),
+  ]);
+  limitReads(unread, unread.rest.issues.listLabelsForRepo, 1, { 'retry-after': String(6 * 60 * 60) });
+  await assert.rejects(runOnMockedClock(unread), /longer than this run/);
+  assert.deepStrictEqual(unread.added, []);
 });
 
 test('fails on an error other than a rate limit', async () => {
@@ -456,10 +465,12 @@ test('the dry run counts the decisions without writing', async () => {
 });
 
 test('applies the decisions while a merged label is left in the repository, whichever items carry it', async () => {
-  // The last open item with a merged label was closed before the run resumed.
+  // The last open item with a merged label was closed before the run resumed. The
+  // run that stopped had already moved #2: it is not written again.
   const resumed = buildGithubMock([
     issue(14586, NEW, ['Project:NPM'], { pull_request: {} }),
     issue(1, NEW, ['bug'], { closed: true }),
+    issue(2, NEW, ['bug', 'type: bug'], { closed: true }),
   ]);
   assert.strictEqual(await runOnMockedClock(resumed), 0);
   assert.deepStrictEqual(resumed.added, ['#14586 area: cli', '#1 type: bug']);
