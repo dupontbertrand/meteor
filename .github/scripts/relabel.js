@@ -146,9 +146,10 @@ function readManifest(text) {
 }
 
 // Whether the migration is still going on. It deletes the merged labels when it ends,
-// so open items carrying one say it has not. An old name the sync could not rename
-// does not count: it stays until its `from_name` line goes.
-const isMigrating = (openItems) => openItems.some((item) => item.labels.some((label) => MERGES[label.name]));
+// so one left in the repository says it has not, even when only closed items carry
+// it. An old name the sync could not rename does not count: it stays until its
+// `from_name` line goes.
+const isMigrating = (repoLabels) => repoLabels.some((name) => MERGES[name]);
 
 // Whether a decision removes this label from the item: a move must not add it back.
 const removes = (item, label) => item.state === 'open' && (ITEMS[item.number]?.remove?.includes(label) ?? false);
@@ -317,7 +318,10 @@ module.exports = async ({ github, context, dryRun, runTime = RUN_TIME }) => {
 
   // The decisions belong to the migration: once it is over, these items are left to
   // the triagers.
-  if (isMigrating(open)) {
+  const repoLabels = await read(() =>
+    github.paginate(github.rest.issues.listLabelsForRepo, { owner, repo, per_page: 100 })
+  );
+  if (isMigrating(repoLabels.map((label) => label.name))) {
     for (const item of open) {
       const { add = [], remove = [] } = ITEMS[item.number] ?? {};
       for (const label of add) {
