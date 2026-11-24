@@ -53,6 +53,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
+      discussions: write
     env:
       # Only devel applies; a pull request or a dispatch on another branch is a dry run.
       APPLY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/devel' }}
@@ -94,7 +95,9 @@ jobs:
         uses: actions/github-script@v9
         with:
           retries: 3
-          # relabel.js waits out rate limits itself.
+          # relabel.js waits out rate limits itself. With `retries` set, the client still sends a
+          # request answered by one of these codes three more times at once before the script
+          # sees the answer (actions/github-script#732).
           retry-exempt-status-codes: 400,401,403,404,422,429
           script: |
             const relabel = require('./.github/scripts/relabel.js')
